@@ -8,6 +8,7 @@ import { BackendError } from "../errors";
 import { shopifyConfig } from "./config";
 import { connectionService, liveShopify } from "./service";
 import { PostgresShopifyStore } from "./store";
+import { oauthTrace } from "./diagnostics";
 import { parseToolCall } from "../validation";
 import { toolCatalog } from "@/lib/backend/tool-catalog";
 import type { ReadToolCall } from "@/types/backend";
@@ -138,6 +139,8 @@ export async function callback(request: Request) {
   const jar = await cookies();
   const browserState = jar.get(stateCookie)?.value;
   const params = new URL(request.url).searchParams;
+  const trace = oauthTrace(browserState);
+  trace("A", "PASS");
   const sameAttempt =
     !!browserState &&
     params.getAll("state").length === 1 &&
@@ -151,6 +154,7 @@ export async function callback(request: Request) {
     const readiness = await getBackendStatus(fetch, async () => {
       stage = "authentication";
       actorId = (await requireUser()).id;
+      trace("L", "PASS");
       stage = "readiness";
     });
     if (!readiness.liveConnectionsEnabled || !actorId) {
@@ -173,6 +177,7 @@ export async function callback(request: Request) {
     stage = "oauth";
     await connectionService(context).complete(params, browserState);
     succeeded = true;
+    trace("V", "PASS", { code: "REDIRECT_CONNECTED", httpStatus: 303 });
     return redirect("/integrations?shopify=connected");
   } catch (error) {
     // Never log the Request, URL, query parameters, cookies or error objects.
@@ -195,11 +200,22 @@ export async function callback(request: Request) {
       stateCookiePresent: !!browserState,
       stateMatches: sameAttempt,
     });
+    trace(
+      stage === "context"
+        ? "CONTEXT"
+        : code === "NOT_AUTHENTICATED"
+          ? "L"
+          : "CALLBACK",
+      "FAIL",
+      { code },
+    );
+    trace("V", "PASS", { code: "REDIRECT_FAILED", httpStatus: 303 });
     return redirect("/integrations?shopify=failed");
   } finally {
     if (!succeeded && actorId && sameAttempt) {
       try {
         await cancelAttempt(actorId, browserState);
+        trace("CLEANUP", "PASS");
       } catch {
         // A database outage must not replace the safe redirect with a raw error.
         // Summary validates the durable state's expiry even if cleanup is unavailable.

@@ -102,6 +102,156 @@ function signed(state, changes = {}) {
   );
   return p;
 }
+test("temporary HMAC diagnostics distinguish SDK encoding from wrong credentials without changing acceptance", () => {
+  const state = "a".repeat(64),
+    now = 1790338512000;
+  const vectors = [
+    [
+      "",
+      "b221783719c7d2ea6d50a7d4ab50629794ec48f1a2a4ff6b16174720fdc18e30",
+      true,
+    ],
+    [
+      "&host=YWRtaW4%3D",
+      "7dcc3af581aa71e3ee2aba6e219afa5f17f5c71b5cc9901327f61536b60a85ca",
+      false,
+    ],
+    [
+      "&note=a%20b%2Bc%26d%3D%25",
+      "5173e12cf5d02dd27a96792d57f36cad22f1201ea87344206080c8177da8f005",
+      false,
+    ],
+  ];
+  for (const [extra, hmac, existingAccepts] of vectors) {
+    const params = new URLSearchParams(
+      `timestamp=1790338512&state=${state}&shop=${shop}&code=fixture_code${extra}&hmac=${hmac}`,
+    );
+    const events = [];
+    const run = () =>
+      callbackParameters(params, config.clientSecret, state, now, (...e) =>
+        events.push(e),
+      );
+    if (existingAccepts) assert.equal(run().shop, shop);
+    else assert.throws(run, { code: "INVALID_CALLBACK" });
+    assert.deepEqual(
+      events.find(([step, status]) => step === "F" && status === "INFO")[2],
+      {
+        canonicalDiffers: !existingAccepts,
+        sdkHmacValid: true,
+      },
+    );
+    for (const scenario of ["wrong_secret", "tamper", "changed_hmac"]) {
+      const changed = new URLSearchParams(params);
+      if (scenario === "tamper") changed.set("shop", "tampered.myshopify.com");
+      if (scenario === "changed_hmac") changed.set("hmac", "0".repeat(64));
+      const failures = [];
+      assert.throws(
+        () =>
+          callbackParameters(
+            changed,
+            scenario === "wrong_secret"
+              ? "WRONG_TEST_SECRET"
+              : config.clientSecret,
+            state,
+            now,
+            (...e) => failures.push(e),
+          ),
+        { code: "INVALID_CALLBACK" },
+      );
+      assert.equal(
+        failures.find(([step, status]) => step === "F" && status === "INFO")[2]
+          .sdkHmacValid,
+        false,
+      );
+    }
+    params.append("shop", shop);
+    assert.throws(
+      () => callbackParameters(params, config.clientSecret, state, now),
+      { code: "INVALID_CALLBACK" },
+    );
+  }
+});
+
+test("OAuth diagnostics correlate attempts but never emit raw credentials, callback values or arbitrary errors", () => {
+  const { oauthTrace, credentialFingerprints, diagnosticCode } = load(
+    "lib/server/shopify/diagnostics.ts",
+  );
+  const records = [],
+    original = console.info,
+    state = "b".repeat(64);
+  console.info = (...parts) => records.push(parts);
+  try {
+    const trace = oauthTrace(state, context.businessId);
+    trace("CONFIG", "INFO", {
+      ...credentialFingerprints(config.clientId, config.clientSecret),
+      accessToken: "TEST_ONLY_ACCESS_TOKEN",
+      code: "UNTRUSTED_SECRET_ERROR",
+      shopHash: "RAW_SHOP_SECRET",
+      httpStatus: 200,
+    });
+    trace("A", "PASS");
+    const output = JSON.stringify(records);
+    for (const forbidden of [
+      state,
+      config.clientId,
+      config.clientSecret,
+      "TEST_ONLY_ACCESS_TOKEN",
+      "UNTRUSTED_SECRET_ERROR",
+      "RAW_SHOP_SECRET",
+    ])
+      assert.equal(output.includes(forbidden), false);
+    const one = JSON.parse(records[0][1]),
+      two = JSON.parse(records[1][1]);
+    assert.equal(one.attemptId, two.attemptId);
+    assert.match(one.attemptId, /^[a-f0-9]{32}$/);
+    assert.equal(one.businessId, context.businessId);
+    assert.equal(one.code, "UNAVAILABLE");
+    assert.equal(diagnosticCode(new Error("secret error")), "UNAVAILABLE");
+    console.info = () => {
+      throw new Error("sink failure");
+    };
+    assert.doesNotThrow(() => trace("A", "PASS"));
+  } finally {
+    console.info = original;
+  }
+});
+
+test("token diagnostics retain only HTTP status and safe validation classifications", async () => {
+  const events = [],
+    trace = (...e) => events.push(e);
+  await assert.rejects(
+    requestTokens(
+      config,
+      shop,
+      { code: "TEST_ONLY_CODE" },
+      async () => new Response("private provider error", { status: 401 }),
+      Date.now(),
+      trace,
+    ),
+    { code: "NEEDS_REAUTHORIZATION" },
+  );
+  assert.deepEqual(events, [
+    ["O", "FAIL", { httpStatus: 401, code: "NEEDS_REAUTHORIZATION" }],
+  ]);
+  events.length = 0;
+  await requestTokens(
+    config,
+    shop,
+    { code: "TEST_ONLY_CODE" },
+    async () => Response.json(tokenResponse()),
+    Date.now(),
+    trace,
+  );
+  assert.deepEqual(
+    events.map(([step, status]) => [step, status]),
+    [
+      ["O", "PASS"],
+      ["P", "PASS"],
+      ["Q", "PASS"],
+    ],
+  );
+  assert.equal(JSON.stringify(events).includes("TEST_ONLY_"), false);
+});
 class Store {
   constructor() {
     this.row = {

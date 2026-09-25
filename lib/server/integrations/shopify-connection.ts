@@ -14,6 +14,12 @@ import type {
 import type { ShopifyConfig } from "../shopify/config";
 import { ShopifyVault } from "../shopify/vault";
 import {
+  oauthTrace,
+  credentialFingerprints,
+  diagnosticCode,
+  fingerprint,
+} from "../shopify/diagnostics";
+import {
   callbackParameters,
   digestState,
   requestTokens,
@@ -55,6 +61,10 @@ export class ShopifyConnectionService {
       this.config.redirectUri,
       options,
     );
+    oauthTrace(state, this.context.businessId)("START", "PASS", {
+      ...credentialFingerprints(this.config.clientId, this.config.clientSecret),
+      shopHash: fingerprint(shop),
+    });
     const url = new URL(`https://${shop}/admin/oauth/authorize`);
     url.search = new URLSearchParams({
       client_id: this.config.clientId,
@@ -66,26 +76,44 @@ export class ShopifyConnectionService {
   }
   async complete(params: URLSearchParams, browserState: string | undefined) {
     this.owner();
+    const trace = oauthTrace(browserState, this.context.businessId);
+    trace(
+      "CONFIG",
+      "INFO",
+      credentialFingerprints(this.config.clientId, this.config.clientSecret),
+    );
     const callback = callbackParameters(
       params,
       this.config.clientSecret,
       browserState,
+      Date.now(),
+      trace,
     );
-    const state = await this.store.consume(
-      digestState(callback.state),
-      callback.shop,
-    );
+    const state = await this.store
+      .consume(digestState(callback.state), callback.shop)
+      .catch((error: unknown) => {
+        trace("U", "FAIL", { code: diagnosticCode(error) });
+        throw error;
+      });
     if (
       !state ||
       state.organizationId !== this.context.organizationId ||
       state.businessId !== this.context.businessId ||
       state.actorId !== this.context.actorId ||
       state.shopDomain !== callback.shop
-    )
+    ) {
+      trace("U", "FAIL", { code: "INVALID_STATE" });
       throw new BackendError(
         "INVALID_STATE",
         "The connection link expired. Please connect again.",
       );
+    }
+    // The existing consume RPC atomically enforces expiry, replay and shop binding.
+    trace("U", "PASS");
+    trace("I", "PASS");
+    trace("J", "PASS");
+    trace("K", "PASS", { shopHash: fingerprint(state.shopDomain) });
+    let checkpoint: "O" | "R" | "STAGE" | "S" | "T" = "O";
     try {
       if (state.redirectUri !== this.config.redirectUri)
         throw new BackendError(
@@ -97,13 +125,20 @@ export class ShopifyConnectionService {
         callback.shop,
         { code: callback.code },
         this.transport,
+        Date.now(),
+        trace,
       );
+      checkpoint = "R";
       const cipher = this.vault.seal(
         this.context,
         state.connectionId,
         JSON.stringify(tokens),
       );
+      trace("R", "PASS");
+      checkpoint = "STAGE";
       await this.store.stage(state, cipher, tokens);
+      trace("STAGE", "PASS");
+      checkpoint = "S";
       // Verify only this attempt’s staged credential. The current connection remains active until commit.
       const connection: StoredIntegrationConnection = {
         id: state.connectionId,
@@ -154,7 +189,11 @@ export class ShopifyConnectionService {
               : null,
         },
         credentials,
-        this.transport,
+        async (url, options) => {
+          const response = await this.transport(url, options);
+          trace("S", "INFO", { httpStatus: response.status });
+          return response;
+        },
       );
       const shop = await adapter.executeRead({ tool: "getStore", input: {} });
       if (
@@ -167,10 +206,15 @@ export class ShopifyConnectionService {
           "SHOP_MISMATCH",
           "Shopify returned a different store.",
         );
+      trace("S", "PASS");
+      checkpoint = "T";
       await this.store.commit(state, cipher, tokens, shop);
+      trace("T", "PASS");
       return shop;
-    } catch {
+    } catch (error) {
+      trace(checkpoint, "FAIL", { code: diagnosticCode(error) });
       await this.store.abort(state);
+      trace("CLEANUP", "PASS");
       throw new BackendError(
         "CONNECTION_FAILED",
         "Shopify could not be connected. Please try connecting again.",
