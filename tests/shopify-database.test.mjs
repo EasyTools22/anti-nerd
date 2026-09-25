@@ -388,7 +388,13 @@ test("readiness attests migration objects, RLS and private grants without exposi
   assert.deepEqual(await read(), {
     version: 2,
     ready: true,
-    migrations: { "001": true, "002": true, "003": true, "005": true },
+    migrations: {
+      "001": true,
+      "002": true,
+      "003": true,
+      "005": true,
+      "006": true,
+    },
     rls: true,
     permissions: true,
     columns: true,
@@ -781,9 +787,128 @@ test("existing commerce verification checks schema, RLS and RPC grants after all
   assert.ok(results[1].rows.length >= 9);
   assert.ok(results[1].rows.every((row) => row.rls_enabled));
   for (const row of results[2].rows) {
-    const business = /create_business|select_business/.test(row.routine);
+    const business = /create_business|select_business|shopify_pending/.test(row.routine);
     assert.equal(row.anon_can_execute, false);
     assert.equal(row.member_can_execute, business);
     assert.equal(row.server_can_execute, !business);
   }
+});
+
+const attemptContext = (s, actor = owner, operation = "lookup") =>
+  asRole(
+    "service_role",
+    null,
+    async () =>
+      (
+        await q("select public.shopify_oauth_context($1,$2,$3) result", [
+          s.digest,
+          actor,
+          operation,
+        ])
+      )[0].result,
+  );
+const pendingFor = (biz, actor = owner) =>
+  asRole(
+    "authenticated",
+    actor,
+    async () =>
+      (await q("select public.shopify_pending($1,$2) result", [org, biz]))[0]
+        .result,
+  );
+
+test("durable callback context restores only the starting business for the original authorized actor", async () => {
+  const a = await commerceFixture("Callback A"),
+    b = await commerceFixture("Callback B");
+  const s = await a.start(uniqueShop());
+  await asRole("authenticated", owner, () =>
+    q("select public.select_business($1,$2)", [org, b.biz]),
+  );
+  const original = await attemptContext(s);
+  assert.equal(original.businessId, a.biz);
+  assert.equal(original.organizationId, org);
+  assert.equal(original.actorId, owner);
+  assert.equal(await attemptContext(s, other), null);
+  assert.equal(await attemptContext(s, member), null);
+  for (const role of ["anon", "authenticated"])
+    await asRole(role, owner, () =>
+      assert.rejects(
+        q("select public.shopify_oauth_context($1,$2,'lookup')", [
+          s.digest,
+          owner,
+        ]),
+      ),
+    );
+  assert.equal((await pendingFor(a.biz)).domain, s.shop);
+  assert.equal(await pendingFor(a.biz, other), null);
+  await q(
+    "update public.organization_members set role='member' where organization_id=$1 and user_id=$2",
+    [org, owner],
+  );
+  try {
+    assert.equal(await attemptContext(s), null);
+    assert.equal(await pendingFor(a.biz), null);
+    await assert.rejects(
+      a.scoped("consume", { digest: s.digest, shop: s.shop }),
+      /NOT_AUTHORIZED/,
+    );
+    await attemptContext(s, owner, "cancel");
+    assert.equal((await a.current()).pending_shop, null);
+  } finally {
+    await q(
+      "update public.organization_members set role='owner' where organization_id=$1 and user_id=$2",
+      [org, owner],
+    );
+  }
+});
+
+test("failed callback and expired attempts clear pending without deleting the working connection", async () => {
+  const f = await commerceFixture(),
+    original = await f.install(uniqueShop());
+  const old = await f.current();
+  for (const expired of [false, true]) {
+    const s = await f.start(uniqueShop(), true);
+    if (expired)
+      await q(
+        "update private.shopify_oauth_states set expires_at=now()-interval '1 second' where digest=$1",
+        [s.digest],
+      );
+    assert.equal(!!(await pendingFor(f.biz)), !expired);
+    await attemptContext(s, owner, "cancel");
+    assert.equal(await pendingFor(f.biz), null);
+    assert.equal((await f.current()).pending_shop, null);
+    assert.equal(
+      (await f.current()).external_account_identifier,
+      old.external_account_identifier,
+    );
+    assert.deepEqual(
+      await f.scoped("secret", { reference: original.envelope.id }),
+      original.envelope,
+    );
+    assert.equal(await attemptContext(s), null);
+  }
+  const orphan = await f.start(uniqueShop(), true);
+  await q("delete from private.shopify_oauth_states where digest=$1", [
+    orphan.digest,
+  ]);
+  assert.ok((await f.current()).pending_shop);
+  assert.equal(
+    await pendingFor(f.biz),
+    null,
+    "denormalized pending fields cannot manufacture a valid attempt",
+  );
+});
+
+test("stale and replayed callback cleanup cannot cancel a newer attempt or a claimed exchange", async () => {
+  const f = await commerceFixture(),
+    old = await f.start(uniqueShop()),
+    fresh = await f.start(uniqueShop());
+  await attemptContext(old, owner, "cancel");
+  assert.equal((await pendingFor(f.biz)).domain, fresh.shop);
+  const staged = await f.stage(fresh);
+  assert.equal(await attemptContext(fresh), null);
+  await attemptContext(fresh, owner, "cancel");
+  assert.ok(await pendingFor(f.biz));
+  await f.scoped("commit", staged);
+  assert.equal((await f.current()).external_account_identifier, fresh.shop);
+  assert.equal(await pendingFor(f.biz), null);
 });

@@ -6,6 +6,7 @@ export interface ShopifySummary {
   permissions: string[];
   connectedAt: string | null;
   pendingDomain: string | null;
+  pendingExpiresAt: string | null;
   configured: boolean;
   available: boolean;
   owner: boolean;

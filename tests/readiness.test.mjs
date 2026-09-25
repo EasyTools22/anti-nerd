@@ -59,7 +59,13 @@ const env = {
 const schema = {
   version: 2,
   ready: true,
-  migrations: { "001": true, "002": true, "003": true, "005": true },
+  migrations: {
+    "001": true,
+    "002": true,
+    "003": true,
+    "005": true,
+    "006": true,
+  },
   rls: true,
   permissions: true,
   columns: true,
@@ -140,6 +146,12 @@ test("missing schema, missing readiness RPC, insecure RLS and invalid replies fa
       { schema: { code: "PGRST202" }, schemaStatus: 404 },
       { schema: { ...schema, ready: false } },
       { schema: { ...schema, rls: false } },
+      {
+        schema: {
+          ...schema,
+          migrations: { ...schema.migrations, "006": false },
+        },
+      },
       {
         schema: {
           ...schema,

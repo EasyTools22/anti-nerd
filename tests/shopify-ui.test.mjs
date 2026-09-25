@@ -18,6 +18,7 @@ const defaults = {
   permissions: ["read_products", "read_orders"],
   connectedAt: "2026-09-25T00:00:00Z",
   pendingDomain: null,
+  pendingExpiresAt: null,
   configured: true,
   available: true,
   owner: true,
@@ -298,11 +299,58 @@ test("disconnect explicitly preserves account, Brain, audit and business setting
     assert.doesNotMatch(clean, /Reconnect Shopify/);
     const pending = renderToStaticMarkup(
       React.createElement(ShopifyConnection, {
-        connection: { ...defaults, pendingDomain: "new-fixture.myshopify.com" },
+        connection: {
+          ...defaults,
+          pendingDomain: "new-fixture.myshopify.com",
+          pendingExpiresAt: new Date(Date.now() + 600000).toISOString(),
+        },
       }),
     );
     assert.match(pending, /Current store remains active until complete/);
   } finally {
     modalMode = null;
   }
+});
+
+test("pending-only and revoked connections never offer Disconnect; pending label expires and failure has retry", () => {
+  for (const fixture of [
+    {
+      ...defaults,
+      connected: false,
+      linked: false,
+      domain: null,
+      pendingDomain: "pending.myshopify.com",
+      pendingExpiresAt: new Date(Date.now() + 600000).toISOString(),
+    },
+    { ...defaults, connected: false, health: "DISCONNECTED" },
+  ]) {
+    const html = renderToStaticMarkup(
+      React.createElement(ShopifyConnection, {
+        connection: fixture,
+        retry: true,
+      }),
+    );
+    assert.doesNotMatch(html, />Disconnect</);
+    assert.match(html, /Retry Shopify connection/);
+  }
+  const expired = renderToStaticMarkup(
+    React.createElement(ShopifyConnection, {
+      connection: {
+        ...defaults,
+        pendingDomain: "pending.myshopify.com",
+        pendingExpiresAt: new Date(0).toISOString(),
+      },
+    }),
+  );
+  assert.doesNotMatch(expired, /Connecting new store/);
+  const absent = renderToStaticMarkup(
+    React.createElement(ShopifyConnection, {
+      connection: {
+        ...defaults,
+        pendingDomain: "pending.myshopify.com",
+        pendingExpiresAt: null,
+      },
+    }),
+  );
+  assert.doesNotMatch(absent, /Connecting new store/);
 });

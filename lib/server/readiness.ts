@@ -180,6 +180,7 @@ export async function getBackendStatus(
           schema?.migrations?.["002"] !== true ||
           schema?.migrations?.["003"] !== true ||
           schema?.migrations?.["005"] !== true ||
+          schema?.migrations?.["006"] !== true ||
           schema?.rls !== true ||
           schema?.permissions !== true ||
           schema?.columns !== true
@@ -187,7 +188,9 @@ export async function getBackendStatus(
           blockers.push(
             schema?.migrations?.["005"] !== true
               ? "COMMERCE_MIGRATION_005_REQUIRED"
-              : "DATABASE_SCHEMA_OR_SECURITY_NOT_READY",
+              : schema?.migrations?.["006"] !== true
+                ? "SHOPIFY_CALLBACK_MIGRATION_006_REQUIRED"
+                : "DATABASE_SCHEMA_OR_SECURITY_NOT_READY",
           );
           return "pending" as const;
         }

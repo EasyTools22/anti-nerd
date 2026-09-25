@@ -80,14 +80,18 @@ export class ShopifyConnectionService {
       state.organizationId !== this.context.organizationId ||
       state.businessId !== this.context.businessId ||
       state.actorId !== this.context.actorId ||
-      state.shopDomain !== callback.shop ||
-      state.redirectUri !== this.config.redirectUri
+      state.shopDomain !== callback.shop
     )
       throw new BackendError(
         "INVALID_STATE",
         "The connection link expired. Please connect again.",
       );
     try {
+      if (state.redirectUri !== this.config.redirectUri)
+        throw new BackendError(
+          "INVALID_STATE",
+          "Start a new Shopify connection.",
+        );
       const tokens = await requestTokens(
         this.config,
         callback.shop,

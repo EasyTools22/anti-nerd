@@ -13,7 +13,11 @@ export function callbackParameters(
   browserState: string | undefined,
   now = Date.now(),
 ) {
-  const invalid = () => {
+  const invalid = (
+    reason: "parameters" | "state_cookie" | "timestamp" | "hmac" = "parameters",
+  ) => {
+    // Fixed categories only; never log the callback, nonce or computed signature.
+    console.warn("shopify_callback_validation", { reason });
     throw new BackendError(
       "INVALID_CALLBACK",
       "The connection link is invalid or expired. Please connect again.",
@@ -30,15 +34,15 @@ export function callbackParameters(
     code = params.get("code") ?? "",
     shop = params.get("shop") ?? "",
     timestamp = params.get("timestamp") ?? "";
+  if (!browserState || state !== browserState) invalid("state_cookie");
   if (
     !/^[a-f0-9]{64}$/.test(state) ||
-    state !== browserState ||
     !/^[a-f0-9]{64}$/.test(hmac) ||
     !/^[A-Za-z0-9_-]{1,1024}$/.test(code) ||
-    !/^\d{10}$/.test(timestamp) ||
-    Math.abs(now / 1000 - Number(timestamp)) > 300
+    !/^\d{10}$/.test(timestamp)
   )
     invalid();
+  if (Math.abs(now / 1000 - Number(timestamp)) > 300) invalid("timestamp");
   if (validateShopDomain(shop) !== shop) invalid();
   const message = [...params.entries()]
     .filter(([key]) => key !== "hmac")
@@ -46,7 +50,7 @@ export function callbackParameters(
     .map(([key, value]) => `${key}=${value}`)
     .join("&");
   const expected = createHmac("sha256", secret).update(message).digest();
-  if (!timingSafeEqual(expected, Buffer.from(hmac, "hex"))) invalid();
+  if (!timingSafeEqual(expected, Buffer.from(hmac, "hex"))) invalid("hmac");
   return { state, code, shop };
 }
 export function verifyWebhook(

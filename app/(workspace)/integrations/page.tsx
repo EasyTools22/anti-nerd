@@ -21,11 +21,12 @@ export default async function Page({
       )}
       {result === "failed" && (
         <p className="insight" role="alert">
-          Shopify could not be connected. Your previous connection has not been
-          replaced. Select the business where you started and try again.
+          This Shopify connection attempt could not be completed or has expired.
+          Choose Retry Shopify connection below. An existing store stays active
+          until a replacement is verified.
         </p>
       )}
-      <IntegrationsPage shopify={shopify} />
+      <IntegrationsPage shopify={shopify} retryShopify={result === "failed"} />
       <MetadataPanel connections={connections} />
     </>
   );

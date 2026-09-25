@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { ShopifySummary } from "@/types/shopify";
@@ -18,8 +18,10 @@ const date = (value: string | null) =>
     : "Not yet";
 export function ShopifyConnection({
   connection: c,
+  retry = false,
 }: {
   connection: ShopifySummary;
+  retry?: boolean;
 }) {
   const [open, setOpen] = useState<
     "manage" | "connect" | "replace" | "confirm-replace" | "disconnect" | null
@@ -28,6 +30,26 @@ export function ShopifyConnection({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const router = useRouter();
+  const [expiredPending, setExpiredPending] = useState<string | null>(() =>
+    c.pendingExpiresAt && Date.parse(c.pendingExpiresAt) <= Date.now()
+      ? c.pendingExpiresAt
+      : null,
+  );
+  useEffect(() => {
+    if (!c.pendingExpiresAt) return;
+    const timer = setTimeout(
+      () => {
+        setExpiredPending(c.pendingExpiresAt);
+        router.refresh();
+      },
+      Math.max(0, Date.parse(c.pendingExpiresAt) - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [c.pendingExpiresAt, router]);
+  const pending =
+    c.pendingDomain &&
+    c.pendingExpiresAt &&
+    expiredPending !== c.pendingExpiresAt;
   const canManage = c.owner && c.available;
   const canConnect = canManage && c.configured;
   function show(mode: typeof open) {
@@ -94,7 +116,7 @@ export function ShopifyConnection({
           {c.domain && <p className="shopify-domain">Store: {c.domain}</p>}
           <p>Connection health: {healthLabels[c.health]}</p>
           <small>Last checked: {date(c.verifiedAt)}</small>
-          {c.pendingDomain && (
+          {pending && (
             <p role="status">
               Connecting new store… {c.pendingDomain}.{" "}
               {c.connected && "Current store remains active until complete."}
@@ -142,9 +164,13 @@ export function ShopifyConnection({
               disabled={!canConnect}
               onClick={() => show("connect")}
             >
-              {c.linked ? "Reconnect Shopify" : "Connect Shopify"}
+              {retry
+                ? "Retry Shopify connection"
+                : c.linked
+                  ? "Reconnect Shopify"
+                  : "Connect Shopify"}
             </button>
-            {(c.linked || c.pendingDomain) && (
+            {c.connected && (
               <button
                 className="button secondary"
                 disabled={!canManage}

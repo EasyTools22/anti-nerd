@@ -890,6 +890,9 @@ test("cross-site GET callback keeps verified identity, durable state, encryption
   try {
     for (const scenario of [
       "success",
+      "switch_business",
+      "query_business_ignored",
+      "access_removed",
       "invalid_state",
       "expired",
       "replayed",
@@ -902,7 +905,18 @@ test("cross-site GET callback keeps verified identity, durable state, encryption
     ]) {
       const { service, store, calls } = flow();
       const { state } = await service.begin(shop);
+      const succeeds = [
+        "success",
+        "switch_business",
+        "query_business_ignored",
+      ].includes(scenario);
+      const selected = [];
       let params = signed(state);
+      if (scenario === "query_business_ignored")
+        params = signed(state, {
+          businessId: randomUUID(),
+          organizationId: randomUUID(),
+        });
       if (scenario === "invalid_state") params = signed("b".repeat(64));
       if (scenario === "expired")
         store.states.get(digestState(state)).expiresAt = new Date(
@@ -930,12 +944,51 @@ test("cross-site GET callback keeps verified identity, durable state, encryption
         }),
       });
       mocks.set(path.resolve("lib/server/auth/context.ts"), {
-        requireWorkspace: async () => {
+        requireUser: async () => {
           if (scenario === "missing_session")
             throw new BackendError("NOT_AUTHENTICATED", "PRIVATE_SESSION");
-          return context;
+          return { id: context.actorId };
         },
+        requireWorkspace: async () => {
+          throw new Error("Must not read the active business cookie");
+        },
+        resolveWorkspace: async (org, biz) =>
+          scenario === "access_removed" ||
+          org !== context.organizationId ||
+          biz !== context.businessId
+            ? null
+            : context,
+        selectWorkspace: async (org, biz) => selected.push({ org, biz }),
       });
+      mocks.set(path.resolve("lib/server/db/client.ts"), {
+        databaseError: (error) => {
+          if (error) throw new Error("DATABASE_UNAVAILABLE");
+        },
+        persistenceClient: () => ({
+          rpc: async (name, args) => {
+            assert.equal(name, "shopify_oauth_context");
+            assert.equal(args.actor, context.actorId);
+            const row = store.states.get(args.state_digest);
+            if (args.operation === "cancel") {
+              if (row && (!row.used || Date.parse(row.expiresAt) <= Date.now()))
+                store.states.delete(args.state_digest);
+              return { data: null, error: null };
+            }
+            return {
+              data:
+                row && !row.used
+                  ? {
+                      organizationId: row.organizationId,
+                      businessId: row.businessId,
+                      actorId: row.actorId,
+                    }
+                  : null,
+              error: null,
+            };
+          },
+        }),
+      });
+      cache.delete(path.resolve("lib/server/shopify/attempt.ts"));
       mocks.set(path.resolve("lib/server/readiness.ts"), {
         getBackendStatus: async (_transport, verify) => {
           try {
@@ -973,16 +1026,23 @@ test("cross-site GET callback keeps verified identity, durable state, encryption
       assert.equal(response.status, 303, scenario);
       assert.equal(
         response.headers.get("location"),
-        `/integrations?shopify=${scenario === "success" ? "connected" : "failed"}`,
+        `/integrations?shopify=${succeeds ? "connected" : "failed"}`,
         scenario,
       );
       assert.equal(response.headers.get("cache-control"), "no-store");
       assert.equal(response.headers.get("referrer-policy"), "no-referrer");
       assert.equal(await response.text(), "");
-      assert.equal(cookieWrites.at(-1)[2].maxAge, 0);
-      assert.equal(cookieWrites.at(-1)[2].secure, true);
-      assert.equal(calls.length, scenario === "success" ? 2 : 0, scenario);
-      if (scenario === "success") {
+      if (["missing_cookie", "invalid_state"].includes(scenario))
+        assert.equal(cookieWrites.length, 0);
+      else {
+        assert.equal(cookieWrites.at(-1)[2].maxAge, 0);
+        assert.equal(cookieWrites.at(-1)[2].secure, true);
+      }
+      assert.equal(calls.length, succeeds ? 2 : 0, scenario);
+      if (succeeds) {
+        assert.deepEqual(selected, [
+          { org: context.organizationId, biz: context.businessId },
+        ]);
         assert.equal(store.row.status, "connected");
         assert.equal(store.row.business_id, context.businessId);
         assert.equal(
@@ -992,6 +1052,12 @@ test("cross-site GET callback keeps verified identity, durable state, encryption
           false,
         );
       }
+      if (
+        ["expired", "hmac", "wrong_shop", "access_removed"].includes(scenario)
+      )
+        assert.equal(store.states.has(digestState(state)), false);
+      if (scenario === "invalid_state")
+        assert.equal(store.states.has(digestState(state)), true);
       assert.equal(JSON.stringify(logs).includes(state), false);
     }
     for (const secret of [

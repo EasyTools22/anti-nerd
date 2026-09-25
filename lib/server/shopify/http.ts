@@ -1,6 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { requireWorkspace, type WorkspaceContext } from "../auth/context";
+import { requireWorkspace, requireUser } from "../auth/context";
+import { restoreAttempt, cancelAttempt } from "./attempt";
 import { getBackendStatus } from "../readiness";
 import { rateLimiter } from "../security/rate-limit";
 import { BackendError } from "../errors";
@@ -135,16 +136,24 @@ export async function connect(request: Request) {
 }
 export async function callback(request: Request) {
   const jar = await cookies();
-  let stage: "readiness" | "authentication" | "rate_limit" | "oauth" =
+  const browserState = jar.get(stateCookie)?.value;
+  const params = new URL(request.url).searchParams;
+  const sameAttempt =
+    !!browserState &&
+    params.getAll("state").length === 1 &&
+    params.get("state") === browserState;
+  let actorId: string | undefined;
+  let succeeded = false;
+  let stage:
+    "readiness" | "authentication" | "rate_limit" | "context" | "oauth" =
     "readiness";
   try {
-    let context: WorkspaceContext | undefined;
     const readiness = await getBackendStatus(fetch, async () => {
       stage = "authentication";
-      context = await requireWorkspace();
+      actorId = (await requireUser()).id;
       stage = "readiness";
     });
-    if (!readiness.liveConnectionsEnabled || !context) {
+    if (!readiness.liveConnectionsEnabled || !actorId) {
       console.warn("shopify_callback_blocked", {
         stage,
         blockers: readiness.blockers,
@@ -153,12 +162,17 @@ export async function callback(request: Request) {
       return redirect("/integrations?shopify=failed");
     }
     stage = "rate_limit";
-    await rateLimiter.consume("mutation", context.actorId);
+    await rateLimiter.consume("mutation", actorId);
+    if (!sameAttempt)
+      throw new BackendError(
+        "INVALID_CALLBACK",
+        "Start a new Shopify connection.",
+      );
+    stage = "context";
+    const context = await restoreAttempt(actorId, browserState);
     stage = "oauth";
-    await connectionService(context).complete(
-      new URL(request.url).searchParams,
-      jar.get(stateCookie)?.value,
-    );
+    await connectionService(context).complete(params, browserState);
+    succeeded = true;
     return redirect("/integrations?shopify=connected");
   } catch (error) {
     // Never log the Request, URL, query parameters, cookies or error objects.
@@ -175,16 +189,32 @@ export async function callback(request: Request) {
       ].includes(error.code)
         ? error.code
         : "UNAVAILABLE";
-    console.warn("shopify_callback_failed", { stage, code });
+    console.warn("shopify_callback_failed", {
+      stage,
+      code,
+      stateCookiePresent: !!browserState,
+      stateMatches: sameAttempt,
+    });
     return redirect("/integrations?shopify=failed");
   } finally {
-    jar.set(stateCookie, "", {
-      httpOnly: true,
-      secure: true,
-      sameSite: "lax",
-      path: "/api/integrations/shopify/callback",
-      maxAge: 0,
-    });
+    if (!succeeded && actorId && sameAttempt) {
+      try {
+        await cancelAttempt(actorId, browserState);
+      } catch {
+        // A database outage must not replace the safe redirect with a raw error.
+        // Summary validates the durable state's expiry even if cleanup is unavailable.
+        console.warn("shopify_callback_cleanup_unavailable");
+      }
+    }
+    // An old callback must not erase a newer attempt's nonce cookie.
+    if (sameAttempt)
+      jar.set(stateCookie, "", {
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        path: "/api/integrations/shopify/callback",
+        maxAge: 0,
+      });
   }
 }
 export async function disconnect(request: Request) {

@@ -13,6 +13,7 @@ export async function shopifySummary(
     permissions: [],
     connectedAt: null,
     pendingDomain: null,
+    pendingExpiresAt: null,
     configured: (await getBackendStatus()).liveConnectionsEnabled,
     available: true,
     owner: context.role === "owner",
@@ -32,18 +33,17 @@ export async function shopifySummary(
     },
   };
   try {
-    const row = await new PostgresShopifyStore(context).get();
+    const store = new PostgresShopifyStore(context);
+    const row = await store.get();
     if (!row) return base;
+    const pending = await store.pending();
     return {
       ...base,
       generation: row.generation,
       permissions: row.granted_capabilities,
       connectedAt: row.connected_at,
-      pendingDomain:
-        row.pending_expires_at &&
-        Date.parse(row.pending_expires_at) > Date.now()
-          ? row.pending_shop
-          : null,
+      pendingDomain: pending?.domain ?? null,
+      pendingExpiresAt: pending?.expiresAt ?? null,
       linked: !!row.external_account_identifier,
       connected: row.status === "connected",
       name: row.display_name,

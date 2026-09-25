@@ -25,6 +25,16 @@ function state(row: Record<string, unknown>): StateRecord {
 }
 export class PostgresShopifyStore implements ShopifyStore {
   constructor(private context: ShopifyContext) {}
+  async pending(): Promise<{ domain: string; expiresAt: string } | null> {
+    const { data, error } = await (
+      await sessionClient()
+    ).rpc("shopify_pending", {
+      org: this.context.organizationId,
+      business: this.context.businessId,
+    });
+    databaseError(error);
+    return data;
+  }
   async get(): Promise<ShopifyRecord | null> {
     const client = await sessionClient();
     const { data, error } = await client

@@ -75,7 +75,13 @@ const integrations = [
     false,
   ],
 ] as const;
-export function IntegrationsPage({ shopify }: { shopify: ShopifySummary }) {
+export function IntegrationsPage({
+  shopify,
+  retryShopify = false,
+}: {
+  shopify: ShopifySummary;
+  retryShopify?: boolean;
+}) {
   const [category, setCategory] = useState("All");
   const [selected, setSelected] = useState("");
   const [connected, setConnected] = useState<string[]>([]);
@@ -118,6 +124,7 @@ export function IntegrationsPage({ shopify }: { shopify: ShopifySummary }) {
           <ShopifyConnection
             key={`${shopify.businessId}:${shopify.generation}`}
             connection={shopify}
+            retry={retryShopify}
           />
         )}
         {integrations
