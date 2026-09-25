@@ -49,6 +49,9 @@ export function failure(error: unknown) {
     NOT_AUTHORIZED: "Only a workspace owner can manage this connection.",
     INVALID_SHOP: "Enter your store’s myshopify.com domain.",
     SHOP_ALREADY_LINKED: "This store is already linked to a workspace.",
+    CONNECTION_CHANGED:
+      "The connection changed. Refresh this page before continuing.",
+    REPLACEMENT_CONFIRMATION_REQUIRED: "Confirm the store replacement first.",
     SHOP_MISMATCH: "Reconnect the store already linked to this business.",
     RATE_LIMITED: "Please wait before trying again.",
     REFRESH_IN_PROGRESS:
@@ -75,14 +78,47 @@ export function failure(error: unknown) {
     },
   );
 }
+async function requestContext(body: Record<string, unknown>) {
+  const context = await requireWorkspace();
+  if (
+    body.organizationId !== context.organizationId ||
+    body.businessId !== context.businessId
+  )
+    throw new BackendError(
+      "NOT_AUTHORIZED",
+      "The active business changed. Reload this page.",
+    );
+  return context;
+}
+function generation(body: Record<string, unknown>) {
+  if (!Number.isSafeInteger(body.generation) || Number(body.generation) < 0)
+    throw new BackendError("INVALID_INPUT", "Reload this page.");
+  return Number(body.generation);
+}
 export async function connect(request: Request) {
   try {
     const body = await input(request);
-    if (Object.keys(body).length !== 1 || typeof body.shop !== "string")
+    if (
+      Object.keys(body).some(
+        (k) =>
+          ![
+            "shop",
+            "replace",
+            "generation",
+            "organizationId",
+            "businessId",
+          ].includes(k),
+      ) ||
+      typeof body.shop !== "string" ||
+      typeof body.replace !== "boolean"
+    )
       throw new BackendError("INVALID_INPUT", "Check your input.");
-    const context = await requireWorkspace();
+    const context = await requestContext(body);
     await rateLimiter.consume("mutation", context.actorId);
-    const result = await connectionService(context).begin(body.shop);
+    const result = await connectionService(context).begin(body.shop, {
+      replace: body.replace,
+      expectedGeneration: generation(body),
+    });
     (await cookies()).set(stateCookie, result.state, {
       httpOnly: true,
       secure: true,
@@ -120,13 +156,21 @@ export async function callback(request: Request) {
 export async function disconnect(request: Request) {
   try {
     const body = await input(request, false);
-    if (Object.keys(body).length !== 1 || body.confirm !== "disconnect")
+    if (
+      Object.keys(body).some(
+        (k) =>
+          !["confirm", "generation", "organizationId", "businessId"].includes(
+            k,
+          ),
+      ) ||
+      body.confirm !== "disconnect"
+    )
       throw new BackendError("INVALID_INPUT", "Confirm disconnection first.");
-    const context = await requireWorkspace();
+    const context = await requestContext(body);
     if (context.role !== "owner")
       throw new BackendError("NOT_AUTHORIZED", "Only an owner can disconnect.");
     await rateLimiter.consume("mutation", context.actorId);
-    await new PostgresShopifyStore(context).disconnect();
+    await new PostgresShopifyStore(context).disconnect(generation(body));
     return Response.json({ ok: true }, { headers: privateHeaders });
   } catch (error) {
     return failure(error);
@@ -135,14 +179,30 @@ export async function disconnect(request: Request) {
 export async function read(request: Request) {
   try {
     const body = await input(request),
-      call = parseToolCall(body);
+      call = parseToolCall({ tool: body.tool, input: body.input });
+    if (
+      Object.keys(body).some(
+        (k) =>
+          ![
+            "tool",
+            "input",
+            "generation",
+            "organizationId",
+            "businessId",
+          ].includes(k),
+      )
+    )
+      throw new BackendError("INVALID_INPUT", "Check your input.");
     if (toolCatalog[call.tool].impact !== "read")
       throw new BackendError(
         "NOT_AUTHORIZED",
         "Only store reads are available.",
       );
-    const context = await requireWorkspace();
+    const context = await requestContext(body);
     await rateLimiter.consume("mutation", context.actorId);
+    const record = await new PostgresShopifyStore(context).get();
+    if (record?.generation !== generation(body))
+      throw new BackendError("CONNECTION_CHANGED", "Reload this page.");
     const result = await (
       await liveShopify(context)
     ).read(call as ReadToolCall);

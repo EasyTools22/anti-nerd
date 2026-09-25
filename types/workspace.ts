@@ -3,6 +3,12 @@ export type WorkspaceIdentity = {
   role: "owner" | "admin" | "member" | "viewer";
   organizationId: string;
   businessId: string;
+  commerceConnections: {
+    business_id: string;
+    organization_id: string;
+    status: string;
+    connection_health: string;
+  }[];
   organizations: { id: string; name: string }[];
   businesses: {
     id: string;

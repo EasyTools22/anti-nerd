@@ -30,7 +30,7 @@ export class PostgresShopifyStore implements ShopifyStore {
     const { data, error } = await client
       .from("integration_connections")
       .select(
-        "id,organization_id,business_id,provider,external_account_identifier,display_name,status,credential_reference,granted_capabilities,connection_health,shop_id,currency,connected_at,last_verified_at,last_sync_at,generation,access_expires_at,refresh_expires_at",
+        "id,organization_id,business_id,provider,external_account_identifier,display_name,status,credential_reference,granted_capabilities,connection_health,shop_id,currency,connected_at,last_verified_at,last_sync_at,generation,pending_shop,pending_expires_at,access_expires_at,refresh_expires_at",
       )
       .eq("organization_id", this.context.organizationId)
       .eq("business_id", this.context.businessId)
@@ -64,6 +64,8 @@ export class PostgresShopifyStore implements ShopifyStore {
         "NOT_CONNECTED",
         "REFRESH_IN_PROGRESS",
         "SHOP_ALREADY_LINKED",
+        "CONNECTION_CHANGED",
+        "REPLACEMENT_CONFIRMATION_REQUIRED",
       ].includes(error.message)
         ? error.message
         : "DATABASE_UNAVAILABLE";
@@ -74,8 +76,15 @@ export class PostgresShopifyStore implements ShopifyStore {
     }
     return data;
   }
-  async begin(shop: string, digest: string, redirectUri: string) {
-    return state(await this.operation("begin", { shop, digest, redirectUri }));
+  async begin(
+    shop: string,
+    digest: string,
+    redirectUri: string,
+    options?: { replace: boolean; expectedGeneration: number },
+  ) {
+    return state(
+      await this.operation("begin", { shop, digest, redirectUri, ...options }),
+    );
   }
   async consume(digest: string, shop: string) {
     const row = await this.operation("consume", { digest, shop });
@@ -137,10 +146,13 @@ export class PostgresShopifyStore implements ShopifyStore {
       ...(lease ? { lease } : {}),
     });
   }
-  async disconnect() {
-    await this.operation("disconnect");
+  async disconnect(expectedGeneration?: number) {
+    await this.operation(
+      "disconnect",
+      expectedGeneration === undefined ? {} : { expectedGeneration },
+    );
   }
-  async observed() {
-    await this.operation("observed");
+  async observed(reference: string) {
+    await this.operation("observed", { reference });
   }
 }

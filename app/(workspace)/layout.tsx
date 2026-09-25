@@ -11,7 +11,10 @@ export default async function WorkspaceLayout({
   const context = await pageWorkspace();
   const identity = await new WorkspaceRepository(context).identity();
   return (
-    <IdentityProvider identity={identity}>
+    <IdentityProvider
+      key={`${context.organizationId}:${context.businessId}`}
+      identity={identity}
+    >
       <AppShell>{children}</AppShell>
     </IdentityProvider>
   );

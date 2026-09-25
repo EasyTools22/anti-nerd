@@ -1,5 +1,11 @@
 /** Browser-safe connection summary. Never includes a credential reference or encrypted envelope. */
 export interface ShopifySummary {
+  organizationId: string;
+  businessId: string;
+  generation: number;
+  permissions: string[];
+  connectedAt: string | null;
+  pendingDomain: string | null;
   configured: boolean;
   available: boolean;
   owner: boolean;

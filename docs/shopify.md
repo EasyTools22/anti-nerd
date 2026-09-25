@@ -1,5 +1,7 @@
 # Shopify read-only integration
 
+Current commerce lifecycle and migration 005: [Business-scoped commerce connections](commerce-connections.md).
+
 Anti-Nerd now has a configurable real Shopify installation and read path. It reuses `ShopifyAdapter`, the Action Engine, durable policy/approval/audit repositories and verified Supabase identity. No Shopify mutation, AI vendor, autonomous loop or background sync was added. The development server remains on **localhost:5000**.
 
 Implementation is not the same as an installed store. You must apply the third migration and configure a Shopify app, public HTTPS origin, webhooks and encryption keys before connecting. No real store was contacted during development. Tests use fixture transports and local PostgreSQL (PGlite).

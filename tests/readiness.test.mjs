@@ -57,9 +57,9 @@ const env = {
   SHOPIFY_VAULT_KEY_SOURCE: "managed-secret-store",
 };
 const schema = {
-  version: 1,
+  version: 2,
   ready: true,
-  migrations: { "001": true, "002": true, "003": true },
+  migrations: { "001": true, "002": true, "003": true, "005": true },
   rls: true,
   permissions: true,
   columns: true,

@@ -21,8 +21,8 @@ export default async function Page({
       )}
       {result === "failed" && (
         <p className="insight" role="alert">
-          Shopify could not be connected. Sign in with the same workspace and
-          try again.
+          Shopify could not be connected. Your previous connection has not been
+          replaced. Select the business where you started and try again.
         </p>
       )}
       <IntegrationsPage shopify={shopify} />

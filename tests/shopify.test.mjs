@@ -745,13 +745,24 @@ test("configured management HTTP rejects forged tenants, cross-origin, excessive
     new Request("https://app.example/api/integrations/shopify/connect", {
       method: "POST",
       headers: { origin, "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        organizationId: context.organizationId,
+        businessId: context.businessId,
+        generation: 0,
+        ...(typeof body.shop === "string" ? { replace: false } : {}),
+        ...body,
+      }),
     });
   assert.equal(
     (await connect(request({ shop, organizationId: "forged" }))).status,
-    400,
+    403,
   );
   assert.equal(starts, 0);
+  assert.equal(
+    (await connect(request({ shop, businessId: randomUUID() }))).status,
+    403,
+  );
+  assert.equal((await connect(request({ shop, generation: -1 }))).status, 400);
   assert.equal(
     (await connect(request({ shop }, "https://evil.example"))).status,
     403,
@@ -843,4 +854,30 @@ test("production activation requires HTTPS, exact callback, read-only scopes and
     }
     if (mock) mocks.set(file, mock);
   }
+});
+
+test("a consumed OAuth attempt for another business is rejected before token exchange", async () => {
+  const store = new Store();
+  const original = store.consume.bind(store);
+  store.consume = async (...args) => ({
+    ...(await original(...args)),
+    businessId: randomUUID(),
+  });
+  let exchanges = 0;
+  const service = new ShopifyConnectionService(
+    context,
+    store,
+    config,
+    vault,
+    async () => {
+      exchanges++;
+      throw Error("must not contact Shopify");
+    },
+  );
+  const { state } = await service.begin(shop);
+  await assert.rejects(
+    service.complete(signed(state), state),
+    (e) => e.code === "INVALID_STATE",
+  );
+  assert.equal(exchanges, 0);
 });

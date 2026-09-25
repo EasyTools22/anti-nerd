@@ -1,5 +1,7 @@
 # Database and tenant model
 
+Current commerce lifecycle and migration 005: [Business-scoped commerce connections](commerce-connections.md).
+
 Supabase PostgreSQL is the durable store. Application code uses `@supabase/supabase-js`; it does not open arbitrary SQL connections. Apply ordered SQL files to a fresh project, or only unapplied migrations to your existing project. Migration `202609240003_shopify_read_only.sql` extends the existing identity schema. The owner applied migrations 001–003 through the configured project's SQL Editor on 2026-09-25; verification details are below.
 
 ## Schema

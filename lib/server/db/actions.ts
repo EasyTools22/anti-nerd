@@ -58,7 +58,35 @@ export async function workspaceAction(
         uuid(field(form, "organization")),
         uuid(field(form, "business")),
       );
-      destination = "/";
+      const returnTo = field(form, "returnTo");
+      destination = [
+        "/products",
+        "/orders",
+        "/customers",
+        "/inventory",
+        "/store",
+        "/integrations",
+      ].includes(returnTo)
+        ? returnTo
+        : "/integrations";
+    } else if (operation === "add-business") {
+      const context = await requireWorkspace();
+      if (
+        field(form, "organization") !== context.organizationId ||
+        field(form, "activeBusiness") !== context.businessId
+      )
+        throw new BackendError(
+          "NOT_AUTHORIZED",
+          "The business changed. Reload this page.",
+        );
+      const { data, error } = await client.rpc("create_business", {
+        org: context.organizationId,
+        business_name: field(form, "business"),
+        kind: field(form, "kind"),
+      });
+      databaseError(error);
+      await selectWorkspace(context.organizationId, data);
+      destination = "/integrations";
     } else {
       const context = await requireWorkspace();
       if (operation === "instruction") {

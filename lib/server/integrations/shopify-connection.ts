@@ -42,11 +42,19 @@ export class ShopifyConnectionService {
         "Only a workspace owner can connect Shopify.",
       );
   }
-  async begin(shopDomain: string) {
+  async begin(
+    shopDomain: string,
+    options?: { replace: boolean; expectedGeneration: number },
+  ) {
     this.owner();
     const shop = validateShopDomain(shopDomain);
     const state = randomBytes(32).toString("hex");
-    await this.store.begin(shop, digestState(state), this.config.redirectUri);
+    await this.store.begin(
+      shop,
+      digestState(state),
+      this.config.redirectUri,
+      options,
+    );
     const url = new URL(`https://${shop}/admin/oauth/authorize`);
     url.search = new URLSearchParams({
       client_id: this.config.clientId,
@@ -92,7 +100,7 @@ export class ShopifyConnectionService {
         JSON.stringify(tokens),
       );
       await this.store.stage(state, cipher, tokens);
-      // One-use verification view of a durably staged credential. The public row stays unavailable until verification succeeds.
+      // Verify only this attempt’s staged credential. The current connection remains active until commit.
       const connection: StoredIntegrationConnection = {
         id: state.connectionId,
         organizationId: state.organizationId,

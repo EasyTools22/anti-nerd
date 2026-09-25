@@ -17,9 +17,15 @@ function harness({
   membership = true,
   confirmed = true,
   anonymous = false,
+  businesses = [ids.biz],
+  auditError = false,
 } = {}) {
   const writes = [];
   const client = {
+    rpc: async () => ({
+      data: ids.biz,
+      error: auditError ? { code: "XX000" } : null,
+    }),
     auth: {
       getUser: async () => ({
         data: {
@@ -69,8 +75,8 @@ function harness({
           return {
             data:
               filters.organization_id === ids.org &&
-              (!filters.id || filters.id === ids.biz)
-                ? { id: ids.biz }
+              (!filters.id || businesses.includes(filters.id))
+                ? { id: filters.id || businesses[0] }
                 : null,
             error: null,
           };
@@ -81,7 +87,10 @@ function harness({
   };
   const cookieStore = {
     get: (k) => (jar[k] ? { value: jar[k] } : undefined),
-    set: (...args) => writes.push(args),
+    set: (...args) => {
+      writes.push(args);
+      jar[args[0]] = args[1];
+    },
   };
   const mocks = {
     "server-only": {},
@@ -184,4 +193,23 @@ test("authenticated first-time users go to onboarding; unverified/anonymous sess
       harness(options).requireWorkspace(),
       (e) => e.code === "NOT_AUTHENTICATED",
     );
+});
+
+test("a user can switch back and forth between two businesses in one organization", async () => {
+  const h = harness({ businesses: [ids.biz, ids.other] });
+  for (const business of [ids.biz, ids.other, ids.biz]) {
+    await h.selectWorkspace(ids.org, business);
+    const selected = await h.requireWorkspace();
+    assert.equal(selected.organizationId, ids.org);
+    assert.equal(selected.businessId, business);
+    assert.equal(selected.actorId, ids.user);
+  }
+});
+test("failed durable business-selection audit cannot update active context cookies", async () => {
+  const h = harness({ auditError: true });
+  await assert.rejects(
+    h.selectWorkspace(ids.org, ids.biz),
+    /DATABASE_UNAVAILABLE/,
+  );
+  assert.equal(h.writes.length, 0);
 });

@@ -14,9 +14,14 @@ export class WorkspaceRepository {
         .eq("status", "active")
         .order("created_at"),
       client.from("profiles").select("display_name").eq("id", id).maybeSingle(),
+      client
+        .from("integration_connections")
+        .select("organization_id,business_id,status,connection_health")
+        .eq("provider", "shopify"),
     ]);
     results.forEach((result) => databaseError(result.error));
     return {
+      commerceConnections: results[3].data ?? [],
       actorLabel: results[2].data?.display_name || email,
       role: this.context.role,
       organizationId: this.context.organizationId,

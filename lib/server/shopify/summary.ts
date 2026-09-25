@@ -7,6 +7,12 @@ export async function shopifySummary(
   context: WorkspaceContext,
 ): Promise<ShopifySummary> {
   const base: ShopifySummary = {
+    organizationId: context.organizationId,
+    businessId: context.businessId,
+    generation: 0,
+    permissions: [],
+    connectedAt: null,
+    pendingDomain: null,
     configured: (await getBackendStatus()).liveConnectionsEnabled,
     available: true,
     owner: context.role === "owner",
@@ -30,6 +36,14 @@ export async function shopifySummary(
     if (!row) return base;
     return {
       ...base,
+      generation: row.generation,
+      permissions: row.granted_capabilities,
+      connectedAt: row.connected_at,
+      pendingDomain:
+        row.pending_expires_at &&
+        Date.parse(row.pending_expires_at) > Date.now()
+          ? row.pending_shop
+          : null,
       linked: !!row.external_account_identifier,
       connected: row.status === "connected",
       name: row.display_name,

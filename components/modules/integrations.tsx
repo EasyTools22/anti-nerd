@@ -115,7 +115,10 @@ export function IntegrationsPage({ shopify }: { shopify: ShopifySummary }) {
       />
       <div className="three-grid">
         {["All", "Store"].includes(category) && (
-          <ShopifyConnection connection={shopify} />
+          <ShopifyConnection
+            key={`${shopify.businessId}:${shopify.generation}`}
+            connection={shopify}
+          />
         )}
         {integrations
           .filter((i) => category === "All" || i[1] === category)

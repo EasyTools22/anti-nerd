@@ -5,23 +5,36 @@ import Link from "next/link";
 import type { ShopifySummary } from "@/types/shopify";
 import { Badge, Card, Modal } from "@/components/ui/primitives";
 const healthLabels = {
-  CONNECTED: "Connected",
-  NEEDS_REAUTHORIZATION: "Reconnect to continue",
-  MISSING_SCOPE: "Some information is limited",
-  TOKEN_REFRESH_FAILED: "Reconnect to restore access",
+  CONNECTED: "Healthy",
+  NEEDS_REAUTHORIZATION: "Shopify needs to reconnect.",
+  MISSING_SCOPE: "Some permissions are missing. Reconnect Shopify.",
+  TOKEN_REFRESH_FAILED: "Shopify needs to reconnect.",
   DISCONNECTED: "Not connected",
   ERROR: "Connection needs attention",
 };
+const date = (value: string | null) =>
+  value
+    ? new Date(value).toLocaleString("en-GB", { timeZone: "UTC" }) + " UTC"
+    : "Not yet";
 export function ShopifyConnection({
   connection: c,
 }: {
   connection: ShopifySummary;
 }) {
-  const [open, setOpen] = useState<"connect" | "disconnect" | null>(null),
-    [domain, setDomain] = useState(c.domain ?? ""),
-    [busy, setBusy] = useState(false),
-    [message, setMessage] = useState("");
+  const [open, setOpen] = useState<
+    "manage" | "connect" | "replace" | "confirm-replace" | "disconnect" | null
+  >(null);
+  const [domain, setDomain] = useState(c.domain ?? "");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
   const router = useRouter();
+  const canManage = c.owner && c.available;
+  const canConnect = canManage && c.configured;
+  function show(mode: typeof open) {
+    setMessage("");
+    setDomain(mode === "replace" ? "" : (c.domain ?? ""));
+    setOpen(mode);
+  }
   async function submit(operation: "connect" | "disconnect") {
     setBusy(true);
     setMessage("");
@@ -29,22 +42,28 @@ export function ShopifyConnection({
       const response = await fetch(`/api/integrations/shopify/${operation}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          operation === "connect"
-            ? { shop: domain }
-            : { confirm: "disconnect" },
-        ),
+        body: JSON.stringify({
+          organizationId: c.organizationId,
+          businessId: c.businessId,
+          generation: c.generation,
+          ...(operation === "connect"
+            ? {
+                shop: domain.trim().toLowerCase(),
+                replace: open === "confirm-replace",
+              }
+            : { confirm: "disconnect" }),
+        }),
       });
       const data = await response.json();
       if (!response.ok) {
         setMessage(
-          data.message ?? "Connection is unavailable. Please try again.",
+          data.message ??
+            "Connection is unavailable. Refresh this page and try again.",
         );
         return;
       }
-      if (operation === "connect") {
-        window.location.assign(data.url);
-      } else {
+      if (operation === "connect") window.location.assign(data.url);
+      else {
         setOpen(null);
         router.refresh();
       }
@@ -61,14 +80,26 @@ export function ShopifyConnection({
           <div className="detail-row">
             <span className="integration-logo">S</span>
             <Badge tone={c.connected ? "green" : "gray"}>
-              {healthLabels[c.health]}
+              {c.connected
+                ? "Connected"
+                : c.linked
+                  ? "Needs attention"
+                  : "Not connected"}
             </Badge>
           </div>
           <h3>Shopify</h3>
           <p className="integration-description">
             Your store, clearly in view.
           </p>
-          {c.domain && <p className="shopify-domain">{c.domain}</p>}
+          {c.domain && <p className="shopify-domain">Store: {c.domain}</p>}
+          <p>Connection health: {healthLabels[c.health]}</p>
+          <small>Last checked: {date(c.verifiedAt)}</small>
+          {c.pendingDomain && (
+            <p role="status">
+              Connecting new store… {c.pendingDomain}.{" "}
+              {c.connected && "Current store remains active until complete."}
+            </p>
+          )}
           {c.connected && (
             <>
               <p className="muted">
@@ -80,13 +111,7 @@ export function ShopifyConnection({
                   : "Limited"}{" "}
                 · Inventory {c.features.inventory ? "✓" : "Limited"}
               </p>
-              <small>
-                Last checked{" "}
-                {c.verifiedAt
-                  ? new Date(c.verifiedAt).toLocaleString("en-GB")
-                  : "Not yet"}
-              </small>
-              <Link className="button secondary" href="/store">
+              <Link className="button secondary" href="/store" prefetch={false}>
                 View store
               </Link>
             </>
@@ -103,23 +128,27 @@ export function ShopifyConnection({
             </p>
           )}
           <div className="detail-row">
+            {c.linked && (
+              <button
+                className="button secondary"
+                disabled={!c.available}
+                onClick={() => show("manage")}
+              >
+                Manage connection
+              </button>
+            )}
             <button
               className="button"
-              disabled={!c.owner || !c.configured || !c.available}
-              onClick={() => {
-                setMessage("");
-                setOpen("connect");
-              }}
+              disabled={!canConnect}
+              onClick={() => show("connect")}
             >
               {c.linked ? "Reconnect Shopify" : "Connect Shopify"}
             </button>
-            {c.linked && c.health !== "DISCONNECTED" && c.owner && (
+            {(c.linked || c.pendingDomain) && (
               <button
                 className="button secondary"
-                onClick={() => {
-                  setMessage("");
-                  setOpen("disconnect");
-                }}
+                disabled={!canManage}
+                onClick={() => show("disconnect")}
               >
                 Disconnect
               </button>
@@ -131,20 +160,68 @@ export function ShopifyConnection({
           <small>Read only · Store changes are unavailable</small>
         </div>
       </Card>
-      {open === "connect" && (
+      {open === "manage" && (
+        <Modal title="Manage Shopify connection" onClose={() => setOpen(null)}>
+          <dl className="trust-grid">
+            <div>
+              <dt>Store</dt>
+              <dd>
+                {c.name}
+                <br />
+                {c.domain}
+              </dd>
+            </div>
+            <div>
+              <dt>Granted permissions</dt>
+              <dd>{c.permissions.join(", ") || "None"}</dd>
+            </div>
+            <div>
+              <dt>Connection health</dt>
+              <dd>{healthLabels[c.health]}</dd>
+            </div>
+            <div>
+              <dt>Last sync</dt>
+              <dd>{date(c.syncedAt)}</dd>
+            </div>
+            <div>
+              <dt>Connected date</dt>
+              <dd>{date(c.connectedAt)}</dd>
+            </div>
+          </dl>
+          <div className="detail-row">
+            <button
+              className="button"
+              disabled={!canConnect}
+              onClick={() => show("replace")}
+            >
+              Connect a different store
+            </button>
+            <button className="button secondary" onClick={() => setOpen(null)}>
+              Close
+            </button>
+          </div>
+        </Modal>
+      )}
+      {(open === "connect" || open === "replace") && (
         <Modal
-          title={c.linked ? "Reconnect Shopify" : "Connect Shopify"}
+          title={
+            open === "replace"
+              ? "Connect a different store"
+              : c.linked
+                ? "Reconnect Shopify"
+                : "Connect Shopify"
+          }
           onClose={() => !busy && setOpen(null)}
         >
-          <p>
-            Bring your products, orders and store information into Anti-Nerd.
-          </p>
           <form
+            className="shopify-form"
             onSubmit={(e) => {
               e.preventDefault();
-              void submit("connect");
+              if (open === "replace") {
+                setDomain(domain.trim().toLowerCase());
+                setOpen("confirm-replace");
+              } else void submit("connect");
             }}
-            className="shopify-form"
           >
             <label htmlFor="shop-domain">Your Shopify store</label>
             <input
@@ -155,16 +232,71 @@ export function ShopifyConnection({
               autoComplete="off"
               required
               maxLength={80}
-              readOnly={!!c.domain}
+              pattern="[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com"
+              readOnly={open === "connect" && !!c.domain}
             />
             <p className="muted">
-              You’ll continue to Shopify to approve access. Store changes are
-              unavailable.
+              You’ll continue to Shopify to approve read-only access.
             </p>
-            <button className="button" disabled={busy}>
-              {busy ? "Opening Shopify…" : "Continue to Shopify"}
-            </button>
+            <div className="detail-row">
+              <button
+                type="button"
+                className="button secondary"
+                disabled={busy}
+                onClick={() => setOpen(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="button"
+                disabled={
+                  busy ||
+                  (open === "replace" &&
+                    domain.trim().toLowerCase() === c.domain)
+                }
+              >
+                {busy
+                  ? "Opening Shopify…"
+                  : open === "replace"
+                    ? "Review change"
+                    : "Continue to Shopify"}
+              </button>
+            </div>
           </form>
+          {message && <p role="alert">{message}</p>}
+        </Modal>
+      )}
+      {open === "confirm-replace" && (
+        <Modal
+          title="Change the Shopify store for this business?"
+          onClose={() => !busy && setOpen(null)}
+        >
+          <p>Current: {c.domain}</p>
+          <p>New: {domain}</p>
+          <p>
+            Products, orders and customers shown in Anti-Nerd will switch to the
+            new store. Historical Anti-Nerd audit records will remain.
+          </p>
+          <p>
+            Your current connection stays active until the new store is
+            successfully connected and verified.
+          </p>
+          <div className="detail-row">
+            <button
+              className="button secondary"
+              disabled={busy}
+              onClick={() => setOpen(null)}
+            >
+              Cancel
+            </button>
+            <button
+              className="button"
+              disabled={busy}
+              onClick={() => void submit("connect")}
+            >
+              {busy ? "Connecting new store…" : "Continue"}
+            </button>
+          </div>
           {message && <p role="alert">{message}</p>}
         </Modal>
       )}
@@ -174,9 +306,12 @@ export function ShopifyConnection({
           onClose={() => !busy && setOpen(null)}
         >
           <p>
-            Anti-Nerd will stop accessing this store and remove its saved
-            connection credentials. Your activity history stays in your
-            workspace.
+            Anti-Nerd will stop reading new data from this store and delete its
+            saved connection credentials.
+          </p>
+          <p>
+            Your Anti-Nerd account, Business Brain history, audit history and
+            business settings will remain.
           </p>
           <p className="muted">
             You can also uninstall Anti-Nerd in Shopify to remove its permission
@@ -188,14 +323,14 @@ export function ShopifyConnection({
               disabled={busy}
               onClick={() => setOpen(null)}
             >
-              Keep connected
+              Cancel
             </button>
             <button
               className="button"
               disabled={busy}
               onClick={() => void submit("disconnect")}
             >
-              {busy ? "Disconnecting…" : "Confirm disconnect"}
+              {busy ? "Disconnecting…" : "Disconnect Shopify"}
             </button>
           </div>
           {message && <p role="alert">{message}</p>}

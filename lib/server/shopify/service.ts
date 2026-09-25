@@ -54,7 +54,17 @@ export async function liveShopify(context: WorkspaceContext) {
     executeRead: async (call: ReadToolCall) => {
       try {
         const result = await adapter.executeRead(call);
-        await store.observed();
+        const current = await store.get();
+        if (
+          !record.credential_reference ||
+          current?.status !== "connected" ||
+          current.credential_reference !== record.credential_reference
+        )
+          throw new BackendError(
+            "CONNECTION_CHANGED",
+            "The connection changed. Reload this page.",
+          );
+        await store.observed(record.credential_reference);
         return result;
       } catch (error) {
         failure =

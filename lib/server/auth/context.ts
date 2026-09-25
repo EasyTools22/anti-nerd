@@ -134,6 +134,12 @@ export async function selectWorkspace(org: string, business: string) {
       "ORGANIZATION_NOT_FOUND",
       "Workspace is unavailable.",
     );
+  const { client } = await requireUser();
+  const { error } = await client.rpc("select_business", {
+    org: context.organizationId,
+    business: context.businessId,
+  });
+  databaseError(error);
   const jar = await cookies();
   const options = {
     httpOnly: true,

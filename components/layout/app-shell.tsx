@@ -110,7 +110,15 @@ function Shell({ children }: { children: React.ReactNode }) {
             </span>
             <span className="sidebar-copy">
               <strong>{business.name}</strong>
-              <small>{business.business_type} workspace</small>
+              <small>
+                {identity.commerceConnections.find(
+                  (c) =>
+                    c.business_id === business.id &&
+                    c.organization_id === identity.organizationId,
+                )?.status === "connected"
+                  ? "Shopify · Connected"
+                  : `${business.business_type} · Switch business`}
+              </small>
             </span>
             <ChevronsUpDown size={14} className="sidebar-copy" />
           </button>

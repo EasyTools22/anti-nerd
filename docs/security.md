@@ -1,5 +1,7 @@
 # Security boundaries and production gates
 
+Current commerce lifecycle and migration 005: [Business-scoped commerce connections](commerce-connections.md).
+
 ## Implemented
 
 - Supabase-verified identity; current membership/role resolution; per-request session clients; untrusted workspace cookie validation.

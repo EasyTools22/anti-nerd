@@ -138,16 +138,21 @@ export async function getBackendStatus(
         }
         const schema = await response.json();
         if (
-          schema?.version !== 1 ||
+          schema?.version !== 2 ||
           schema?.ready !== true ||
           schema?.migrations?.["001"] !== true ||
           schema?.migrations?.["002"] !== true ||
           schema?.migrations?.["003"] !== true ||
+          schema?.migrations?.["005"] !== true ||
           schema?.rls !== true ||
           schema?.permissions !== true ||
           schema?.columns !== true
         ) {
-          blockers.push("DATABASE_SCHEMA_OR_SECURITY_NOT_READY");
+          blockers.push(
+            schema?.migrations?.["005"] !== true
+              ? "COMMERCE_MIGRATION_005_REQUIRED"
+              : "DATABASE_SCHEMA_OR_SECURITY_NOT_READY",
+          );
           return "pending" as const;
         }
         return "configured" as const;

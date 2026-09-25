@@ -217,7 +217,7 @@ test("stage is not connected, secrets are bound, verified commit persists metada
     )
   ).map((r) => r.action_type);
   assert.ok(events.includes("shopify.connected"));
-  assert.ok(events.includes("shopify.reauthorized"));
+  assert.ok(events.includes("shopify.reconnected"));
   assert.ok(
     !JSON.stringify(await q("select * from public.audit_events")).includes(
       "fixture-ciphertext",
@@ -253,17 +253,17 @@ test("credential binding rejects cross-business envelopes; failed verification e
     /NOT_AUTHORIZED/,
   );
   await op("stage", payload);
-  assert.equal((await row()).status, "unavailable");
+  assert.equal((await row()).status, "connected");
   await assert.rejects(op("secret", { reference: e.id }), /NOT_CONNECTED/);
   assert.deepEqual(
     await op("secret", { reference: e.id, digest: s.digest }),
     e,
   );
   await op("abort", { generation: s.generation });
-  assert.equal((await row()).credential_reference, null);
+  assert.notEqual((await row()).credential_reference, e.id);
   assert.equal(
     (await q("select count(*)::int n from private.shopify_credentials"))[0].n,
-    0,
+    1,
   );
   await op("disconnect");
 });
@@ -321,7 +321,7 @@ test("disconnect removes secrets and pending states, stops refresh, retains appe
   );
   await op("unhealthy", { health: "TOKEN_REFRESH_FAILED", lease, generation });
   const c = await row();
-  assert.equal(c.status, "revoked");
+  assert.equal(c.status, "not_connected");
   assert.equal(c.credential_reference, null);
   assert.equal(
     (await q("select count(*)::int n from private.shopify_oauth_states"))[0].n,
@@ -386,9 +386,9 @@ test("readiness attests migration objects, RLS and private grants without exposi
         (await q("select public.backend_readiness() result"))[0].result,
     );
   assert.deepEqual(await read(), {
-    version: 1,
+    version: 2,
     ready: true,
-    migrations: { "001": true, "002": true, "003": true },
+    migrations: { "001": true, "002": true, "003": true, "005": true },
     rls: true,
     permissions: true,
     columns: true,
@@ -410,4 +410,363 @@ test("readiness attests migration objects, RLS and private grants without exposi
     }
   }
   assert.equal((await read()).ready, true);
+});
+
+// These scenarios run against the actual migration/RPC, with a fresh business each time.
+async function commerceFixture(name = "Commerce fixture") {
+  const biz = await asRole(
+    "authenticated",
+    owner,
+    async () =>
+      (
+        await q("select public.create_business($1,$2,'ecommerce') id", [
+          org,
+          name,
+        ])
+      )[0].id,
+  );
+  const scoped = (operation, payload = {}) =>
+    op(operation, payload, { business: biz });
+  const current = async () =>
+    (
+      await q(
+        "select * from public.integration_connections where organization_id=$1 and business_id=$2",
+        [org, biz],
+      )
+    )[0];
+  const start = async (domain, replace = false) =>
+    scoped("begin", {
+      shop: domain,
+      digest: digest(),
+      redirectUri: "https://app.example/api/integrations/shopify/callback",
+      replace,
+      expectedGeneration: (await current()).generation,
+    });
+  const stage = async (s) => {
+    assert.ok(await scoped("consume", { digest: s.digest, shop: s.shop }));
+    const cipher = {
+      ...(await envelope()),
+      businessId: biz,
+      connectionId: (await current()).id,
+    };
+    const payload = {
+      digest: s.digest,
+      envelope: cipher,
+      accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
+      refreshExpiresAt: new Date(Date.now() + 777600000).toISOString(),
+    };
+    await scoped("stage", payload);
+    return {
+      ...payload,
+      shop: {
+        id: "gid://shopify/Shop/789",
+        domain: s.shop,
+        name: name,
+        currencyCode: "EUR",
+      },
+      scopes: [
+        "read_products",
+        "read_orders",
+        "read_customers",
+        "read_inventory",
+      ],
+    };
+  };
+  const install = async (domain) => {
+    const s = await start(domain);
+    const payload = await stage(s);
+    await scoped("commit", payload);
+    return payload;
+  };
+  return { biz, scoped, current, start, stage, install };
+}
+const uniqueShop = () => `fixture-${randomUUID()}.myshopify.com`;
+
+test("one organization supports two businesses with separate primary Shopify connections and RLS", async () => {
+  const a = await commerceFixture("A"),
+    b = await commerceFixture("B");
+  const ca = await a.install(uniqueShop()),
+    cb = await b.install(uniqueShop());
+  assert.notEqual((await a.current()).id, (await b.current()).id);
+  assert.notEqual(ca.shop.domain, cb.shop.domain);
+  assert.deepEqual(
+    await a.scoped("secret", { reference: ca.envelope.id }),
+    ca.envelope,
+  );
+  await assert.rejects(
+    b.scoped("secret", { reference: ca.envelope.id }),
+    /NOT_CONNECTED/,
+  );
+  await asRole("authenticated", other, async () => {
+    assert.equal(
+      (await q("select id from public.businesses where id=$1", [a.biz])).length,
+      0,
+    );
+    assert.equal(
+      (
+        await q(
+          "select id from public.integration_connections where business_id=$1",
+          [a.biz],
+        )
+      ).length,
+      0,
+    );
+    await assert.rejects(
+      q("select public.select_business($1,$2)", [org, a.biz]),
+      /NOT_AUTHORIZED/,
+    );
+    await assert.rejects(
+      q("select public.create_business($1,'Forbidden','ecommerce')", [org]),
+      /NOT_AUTHORIZED/,
+    );
+  });
+  await asRole("authenticated", owner, async () => {
+    for (const biz of [a.biz, b.biz])
+      assert.equal(
+        (await q("select public.select_business($1,$2) id", [org, biz]))[0].id,
+        biz,
+      );
+    await assert.rejects(
+      q("select public.select_business($1,$2)", [org, otherBusiness]),
+      /NOT_AUTHORIZED/,
+    );
+  });
+  assert.equal(
+    (
+      await q(
+        "select count(*)::int n from public.audit_events where business_id in ($1,$2) and action_type='business.selected'",
+        [a.biz, b.biz],
+      )
+    )[0].n,
+    2,
+  );
+  await asRole("authenticated", member, async () =>
+    assert.rejects(
+      q("select public.create_business($1,'Forbidden','ecommerce')", [org]),
+      /NOT_AUTHORIZED/,
+    ),
+  );
+});
+
+test("replacement failure preserves the active credential, domain, health and prior audit records", async () => {
+  const f = await commerceFixture(),
+    first = await f.install(uniqueShop());
+  const before = await f.current();
+  const domain = uniqueShop();
+  await assert.rejects(f.start(domain), /REPLACEMENT_CONFIRMATION_REQUIRED/);
+  const s = await f.start(domain, true),
+    staged = await f.stage(s);
+  const during = await f.current();
+  for (const key of [
+    "status",
+    "external_account_identifier",
+    "credential_reference",
+    "connection_health",
+    "connected_at",
+  ])
+    assert.deepEqual(during[key], before[key]);
+  assert.equal(during.pending_shop, domain);
+  assert.deepEqual(
+    await f.scoped("secret", { reference: first.envelope.id }),
+    first.envelope,
+  );
+  await assert.rejects(
+    f.scoped("secret", { reference: staged.envelope.id }),
+    /NOT_CONNECTED/,
+  );
+  await assert.rejects(
+    f.scoped("commit", {
+      ...staged,
+      shop: { ...staged.shop, domain: uniqueShop() },
+    }),
+    /INVALID_STATE/,
+  );
+  await f.scoped("abort", { generation: s.generation });
+  assert.deepEqual(
+    await f.scoped("secret", { reference: first.envelope.id }),
+    first.envelope,
+  );
+  assert.equal(
+    (await f.current()).external_account_identifier,
+    before.external_account_identifier,
+  );
+  assert.equal(
+    (
+      await q(
+        "select count(*)::int n from private.shopify_oauth_states where connection_id=$1",
+        [before.id],
+      )
+    )[0].n,
+    0,
+  );
+  assert.equal(
+    (
+      await q(
+        "select count(*)::int n from public.audit_events where integration_connection_id=$1 and action_type='shopify.connected'",
+        [before.id],
+      )
+    )[0].n,
+    1,
+  );
+});
+
+test("replacement success atomically switches staged credentials; audit records safe previous/new shops", async () => {
+  const f = await commerceFixture(),
+    first = await f.install(uniqueShop()),
+    before = await f.current();
+  const s = await f.start(uniqueShop(), true),
+    staged = await f.stage(s);
+  // An audit failure rolls back the entire credential switch.
+  await db.exec(
+    "create function private.fail_test_audit() returns trigger language plpgsql as $$begin raise exception 'TEST_AUDIT_FAILURE';end$$; create trigger test_audit_failure before insert on public.audit_events for each row execute function private.fail_test_audit()",
+  );
+  try {
+    await assert.rejects(f.scoped("commit", staged), /TEST_AUDIT_FAILURE/);
+  } finally {
+    await db.exec(
+      "drop trigger test_audit_failure on public.audit_events;drop function private.fail_test_audit()",
+    );
+  }
+  assert.equal((await f.current()).credential_reference, first.envelope.id);
+  assert.deepEqual(
+    await f.scoped("secret", { reference: first.envelope.id }),
+    first.envelope,
+  );
+  await f.scoped("commit", staged);
+  const after = await f.current();
+  assert.equal(after.id, before.id);
+  assert.equal(after.external_account_identifier, staged.shop.domain);
+  assert.equal(after.credential_reference, staged.envelope.id);
+  assert.equal(after.pending_shop, null);
+  await assert.rejects(
+    f.scoped("secret", { reference: first.envelope.id }),
+    /NOT_CONNECTED/,
+  );
+  await assert.rejects(
+    f.scoped("observed", { reference: first.envelope.id }),
+    /NOT_CONNECTED/,
+  );
+  assert.equal(
+    (
+      await q(
+        "select count(*)::int n from private.shopify_credentials where id=$1",
+        [first.envelope.id],
+      )
+    )[0].n,
+    0,
+  );
+  await assert.rejects(f.scoped("commit", staged), /INVALID_STATE/);
+  const audit = (
+    await q(
+      "select change_parameters from public.audit_events where integration_connection_id=$1 and action_type='shopify.store_replaced'",
+      [after.id],
+    )
+  )[0].change_parameters;
+  assert.deepEqual(audit, {
+    previousShop: first.shop.domain,
+    newShop: staged.shop.domain,
+  });
+  assert.ok(!JSON.stringify(audit).includes("ciphertext"));
+});
+
+test("disconnect deletes active and staged credentials, releases shop binding and permits a different shop", async () => {
+  const f = await commerceFixture(),
+    first = await f.install(uniqueShop());
+  const s = await f.start(uniqueShop(), true),
+    pending = await f.stage(s);
+  const history = (
+    await q(
+      "select count(*)::int n from public.audit_events where integration_connection_id=$1",
+      [(await f.current()).id],
+    )
+  )[0].n;
+  await f.scoped("disconnect", { expectedGeneration: s.generation });
+  const c = await f.current();
+  assert.equal(c.status, "not_connected");
+  assert.equal(c.external_account_identifier, null);
+  assert.equal(c.credential_reference, null);
+  assert.deepEqual(c.granted_capabilities, []);
+  assert.equal(c.pending_shop, null);
+  assert.equal(
+    (
+      await q(
+        "select count(*)::int n from private.shopify_credentials where connection_id=$1",
+        [c.id],
+      )
+    )[0].n,
+    0,
+  );
+  assert.equal(
+    (
+      await q(
+        "select count(*)::int n from private.shopify_oauth_states where connection_id=$1",
+        [c.id],
+      )
+    )[0].n,
+    0,
+  );
+  await assert.rejects(
+    f.scoped("secret", { reference: first.envelope.id }),
+    /NOT_CONNECTED/,
+  );
+  await assert.rejects(f.scoped("commit", pending), /INVALID_STATE/);
+  assert.equal(
+    (
+      await q(
+        "select count(*)::int n from public.audit_events where integration_connection_id=$1",
+        [c.id],
+      )
+    )[0].n,
+    history + 1,
+  );
+  const next = await f.install(uniqueShop());
+  assert.notEqual(next.shop.domain, first.shop.domain);
+  assert.equal((await f.current()).id, c.id);
+});
+
+test("same-store reconnect preserves business and records reconnect; stale confirmation cannot disconnect it", async () => {
+  const f = await commerceFixture(),
+    first = await f.install(uniqueShop()),
+    before = await f.current();
+  const second = await f.install(first.shop.domain);
+  assert.notEqual(second.envelope.id, first.envelope.id);
+  assert.equal((await f.current()).id, before.id);
+  assert.equal(
+    (
+      await q(
+        "select count(*)::int n from public.audit_events where business_id=$1 and action_type='shopify.reconnected'",
+        [f.biz],
+      )
+    )[0].n,
+    1,
+  );
+  await assert.rejects(
+    f.scoped("disconnect", { expectedGeneration: before.generation }),
+    /CONNECTION_CHANGED/,
+  );
+  assert.equal((await f.current()).status, "connected");
+});
+
+test("staged replacement remains bound to its business, actor and expiry", async () => {
+  const a = await commerceFixture(),
+    b = await commerceFixture();
+  const first = await a.install(uniqueShop()),
+    s = await a.start(uniqueShop(), true);
+  assert.equal(
+    await b.scoped("consume", { digest: s.digest, shop: s.shop }),
+    null,
+  );
+  const staged = await a.stage(s);
+  await assert.rejects(
+    b.scoped("secret", { digest: s.digest, reference: staged.envelope.id }),
+    /NOT_CONNECTED/,
+  );
+  await assert.rejects(b.scoped("commit", staged), /INVALID_STATE/);
+  await q(
+    "update private.shopify_oauth_states set expires_at=now()-interval '1 second' where digest=$1",
+    [s.digest],
+  );
+  await assert.rejects(a.scoped("commit", staged), /INVALID_STATE/);
+  assert.equal((await a.current()).credential_reference, first.envelope.id);
+  await a.scoped("abort", { generation: s.generation });
 });

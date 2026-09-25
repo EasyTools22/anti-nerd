@@ -23,6 +23,8 @@ export interface ShopifyRecord {
   last_verified_at: string | null;
   last_sync_at: string | null;
   generation: number;
+  pending_shop: string | null;
+  pending_expires_at: string | null;
   access_expires_at: string | null;
   refresh_expires_at: string | null;
 }
@@ -61,6 +63,7 @@ export interface ShopifyStore {
     shop: string,
     digest: string,
     redirectUri: string,
+    options?: { replace: boolean; expectedGeneration: number },
   ): Promise<StateRecord>;
   consume(digest: string, shop: string): Promise<StateRecord | null>;
   secret(reference: string, state?: StateRecord): Promise<CipherRecord>;
@@ -88,7 +91,7 @@ export interface ShopifyStore {
     lease?: string,
     generation?: number,
   ): Promise<void>;
-  disconnect(): Promise<void>;
-  observed(): Promise<void>;
+  disconnect(expectedGeneration?: number): Promise<void>;
+  observed(reference: string): Promise<void>;
 }
 export type ShopifyContext = WorkspaceContext;
