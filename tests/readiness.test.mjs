@@ -104,6 +104,7 @@ test("complete production dependencies permit read-only connections without expo
     assert.equal(result.liveConnectionsEnabled, true);
     assert.equal(result.previewAvailable, false);
     assert.deepEqual(result.blockers, []);
+    assert.deepEqual(result.missingEnvironment, []);
     for (const key of [
       "authentication",
       "persistence",
@@ -128,6 +129,7 @@ test("missing Supabase configuration blocks connections independently of valid S
   ])
     await withEnv({ [key]: undefined }, async () => {
       const result = await getBackendStatus(transport());
+      assert.deepEqual(result.missingEnvironment, [key]);
       assert.equal(result.liveConnectionsEnabled, false);
       assert.equal(result.shopifyConfiguration, "configured");
     });

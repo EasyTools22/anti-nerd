@@ -210,6 +210,7 @@ export interface BackendStatus {
   shopifyConfiguration: "pending" | "configured";
   credentialVault: "pending" | "configured";
   blockers: string[];
+  missingEnvironment: string[];
   /** Auth, schema/security, Shopify configuration and vault checks; not an installation. */
   liveConnectionsEnabled: boolean;
   previewAvailable: boolean;

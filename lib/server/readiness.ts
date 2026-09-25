@@ -12,6 +12,24 @@ export async function getBackendStatus(
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const publicKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   const secret = process.env.SUPABASE_SECRET_KEY;
+  const requiredEnvironment = {
+    NEXT_PUBLIC_SUPABASE_URL: url,
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: publicKey,
+    SUPABASE_SECRET_KEY: secret,
+    APP_BASE_URL: process.env.APP_BASE_URL,
+    SHOPIFY_CLIENT_ID: process.env.SHOPIFY_CLIENT_ID,
+    SHOPIFY_CLIENT_SECRET: process.env.SHOPIFY_CLIENT_SECRET,
+    SHOPIFY_REDIRECT_URI: process.env.SHOPIFY_REDIRECT_URI,
+    SHOPIFY_VAULT_KEYS: process.env.SHOPIFY_VAULT_KEYS,
+    SHOPIFY_VAULT_ACTIVE_KEY: process.env.SHOPIFY_VAULT_ACTIVE_KEY,
+    ...(process.env.NODE_ENV === "production"
+      ? { SHOPIFY_VAULT_KEY_SOURCE: process.env.SHOPIFY_VAULT_KEY_SOURCE }
+      : {}),
+  };
+  const missingEnvironment = Object.entries(requiredEnvironment)
+    .filter(([, value]) => !value?.trim())
+    .map(([name]) => name)
+    .sort();
   let validUrl = false;
   try {
     const parsed = new URL(url ?? "");
@@ -151,6 +169,7 @@ export async function getBackendStatus(
     shopifyConfiguration,
     credentialVault,
     liveConnectionsEnabled,
+    missingEnvironment,
     blockers: [...new Set(blockers)].sort(),
     previewAvailable: process.env.NODE_ENV === "development",
     shopify: {
