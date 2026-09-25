@@ -30,7 +30,8 @@ with expected(migration, kind, object_name, require_rls) as (
  ('003','table','private.shopify_deliveries',true),
  ('003','table','private.shopify_privacy_requests',true),
  ('003','function','public.shopify_operation(text,uuid,uuid,uuid,jsonb)',null),
- ('003','function','public.shopify_webhook(text,text,text,timestamp with time zone,jsonb)',null)
+ ('003','function','public.shopify_webhook(text,text,text,timestamp with time zone,jsonb)',null),
+ ('004','function','public.backend_readiness()',null)
 ), inspected as (
  select e.*,
  case when kind='table' then to_regclass(object_name) is not null

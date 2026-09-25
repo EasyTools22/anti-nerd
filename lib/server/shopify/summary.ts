@@ -2,12 +2,12 @@ import "server-only";
 import type { WorkspaceContext } from "../auth/context";
 import type { ShopifySummary } from "@/types/shopify";
 import { PostgresShopifyStore } from "./store";
-import { shopifyConfigured } from "./config";
+import { getBackendStatus } from "../readiness";
 export async function shopifySummary(
   context: WorkspaceContext,
 ): Promise<ShopifySummary> {
   const base: ShopifySummary = {
-    configured: shopifyConfigured(),
+    configured: (await getBackendStatus()).liveConnectionsEnabled,
     available: true,
     owner: context.role === "owner",
     linked: false,

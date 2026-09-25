@@ -9,7 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:brain": "node --test tests/brain.test.mjs",
-    "test:backend": "node --test tests/backend.test.mjs",
+    "test:backend": "node --test tests/backend.test.mjs tests/readiness.test.mjs",
     "check:boundaries": "node tests/check-boundaries.mjs",
     "test:persistence": "node --test tests/persistence.test.mjs tests/identity.test.mjs",
     "test:shopify": "node --test tests/shopify.test.mjs tests/shopify-database.test.mjs tests/shopify-ui.test.mjs"

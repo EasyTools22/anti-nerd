@@ -1,8 +1,13 @@
-import { connectionPendingResponse } from "@/lib/server/http";
-import { shopifyConfigured } from "@/lib/server/shopify/config";
+import { jsonResponse } from "@/lib/server/http";
+import { getBackendStatus } from "@/lib/server/readiness";
 export const runtime = "nodejs";
 export async function GET(request: Request) {
-  if (!shopifyConfigured()) return connectionPendingResponse();
+  const readiness = await getBackendStatus();
+  if (!readiness.liveConnectionsEnabled)
+    return jsonResponse(
+      { code: "SHOPIFY_NOT_READY", blockers: readiness.blockers },
+      503,
+    );
   const { callback } = await import("@/lib/server/shopify/http");
   return callback(request);
 }

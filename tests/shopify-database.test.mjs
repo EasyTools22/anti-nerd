@@ -372,3 +372,42 @@ test("uninstall invalidates tokens once; stale event cannot revoke a newer insta
     order_ids: ["456"],
   });
 });
+
+test("readiness attests migration objects, RLS and private grants without exposing tenant data", async () => {
+  for (const role of ["anon", "authenticated"])
+    await asRole(role, owner, async () =>
+      assert.rejects(q("select public.backend_readiness()")),
+    );
+  const read = async () =>
+    asRole(
+      "service_role",
+      null,
+      async () =>
+        (await q("select public.backend_readiness() result"))[0].result,
+    );
+  assert.deepEqual(await read(), {
+    version: 1,
+    ready: true,
+    migrations: { "001": true, "002": true, "003": true },
+    rls: true,
+    permissions: true,
+    columns: true,
+  });
+  for (const change of [
+    "alter table private.shopify_credentials disable row level security",
+    "grant select on private.shopify_credentials to authenticated",
+    "drop function public.shopify_webhook(text,text,text,timestamptz,jsonb)",
+    "drop policy tenant_read on public.organizations",
+    "revoke insert on public.audit_events from service_role",
+    "grant update on public.actions to authenticated",
+  ]) {
+    await db.exec("begin");
+    try {
+      await db.exec(change);
+      assert.equal((await read()).ready, false);
+    } finally {
+      await db.exec("rollback");
+    }
+  }
+  assert.equal((await read()).ready, true);
+});

@@ -1,5 +1,5 @@
 import { SettingsPage } from "@/components/modules/settings";
-import { getBackendStatus } from "@/lib/server/foundation";
+import { getBackendStatus } from "@/lib/server/readiness";
 import { pageWorkspace } from "@/lib/server/auth/context";
 import { WorkspaceRepository } from "@/lib/server/db/workspace";
 import {
@@ -18,7 +18,7 @@ export default async function Page() {
   ]);
   return (
     <SettingsPage
-      backendStatus={getBackendStatus()}
+      backendStatus={await getBackendStatus()}
       instructions={
         <InstructionsPanel
           items={instructions}

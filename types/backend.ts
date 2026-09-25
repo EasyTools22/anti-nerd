@@ -204,10 +204,13 @@ export interface ActionReceipt {
   data?: ToolOutputs[ReadToolName];
 }
 export interface BackendStatus {
-  phase: "foundation";
+  phase: "shopify_read_only";
   persistence: "pending" | "configured";
   authentication: "pending" | "configured";
-  /** Configuration readiness only; not an installation or database health check. */
+  shopifyConfiguration: "pending" | "configured";
+  credentialVault: "pending" | "configured";
+  blockers: string[];
+  /** Auth, schema/security, Shopify configuration and vault checks; not an installation. */
   liveConnectionsEnabled: boolean;
   previewAvailable: boolean;
   shopify: {

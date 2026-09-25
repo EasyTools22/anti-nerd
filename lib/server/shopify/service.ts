@@ -15,6 +15,8 @@ import { ShopifyVault } from "./vault";
 import { ShopifyTokenStore } from "./tokens";
 import { PostgresShopifyStore } from "./store";
 import { BackendError } from "../errors";
+/** Production Shopify composition root: verified tenant context, durable storage and encrypted credentials.
+ * HTTP entry points must pass the shared readiness gate before constructing these services. */
 export function connectionService(context: WorkspaceContext) {
   return new ShopifyConnectionService(
     context,
