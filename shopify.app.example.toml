@@ -1,0 +1,23 @@
+# Configuration template only. Link a real Dev Dashboard app before releasing.
+client_id = "REPLACE_WITH_YOUR_CLIENT_ID"
+name = "Anti-Nerd"
+application_url = "https://YOUR_APP_HOST/integrations"
+embedded = false
+
+[access_scopes]
+scopes = "read_products,read_orders,read_customers,read_inventory"
+use_legacy_install_flow = true
+
+[auth]
+redirect_urls = ["https://YOUR_APP_HOST/api/integrations/shopify/callback"]
+
+[webhooks]
+api_version = "2026-07"
+
+[[webhooks.subscriptions]]
+topics = ["app/uninstalled"]
+uri = "https://YOUR_APP_HOST/api/integrations/shopify/webhooks"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+uri = "https://YOUR_APP_HOST/api/integrations/shopify/webhooks"

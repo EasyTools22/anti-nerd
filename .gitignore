@@ -30,8 +30,25 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# environment files; only the credential-free template is shared
 .env*
+!.env.example
+
+# credentials and local tooling
+*.key
+*.p12
+*.pfx
+.npmrc
+.netrc
+.supabase/
+supabase/.temp/
+supabase/.branches/
+.idea/
+.vscode/
+.codex/
+.agents/
+*.log
+/dist/
 
 # vercel
 .vercel

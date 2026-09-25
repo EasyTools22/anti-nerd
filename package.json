@@ -1,25 +1,37 @@
 {
-  "name": "business-ai",
+  "name": "anti-nerd",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "dev": "next dev --hostname localhost --port 5000",
+    "build": "next build --webpack",
+    "start": "next start --hostname localhost --port 5000",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test:brain": "node --test tests/brain.test.mjs",
+    "test:backend": "node --test tests/backend.test.mjs",
+    "check:boundaries": "node tests/check-boundaries.mjs",
+    "test:persistence": "node --test tests/persistence.test.mjs tests/identity.test.mjs",
+    "test:shopify": "node --test tests/shopify.test.mjs tests/shopify-database.test.mjs tests/shopify-ui.test.mjs"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.117.1",
+    "lucide-react": "^1.48.0",
     "next": "16.3.6",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.6",
+    "prettier": "^3.9.9",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
