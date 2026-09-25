@@ -1,6 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { requireWorkspace } from "../auth/context";
+import { requireWorkspace, type WorkspaceContext } from "../auth/context";
+import { getBackendStatus } from "../readiness";
 import { rateLimiter } from "../security/rate-limit";
 import { BackendError } from "../errors";
 import { shopifyConfig } from "./config";
@@ -16,7 +17,8 @@ function redirect(path: string) {
     status: 303,
     headers: {
       ...privateHeaders,
-      Location: new URL(path, shopifyConfig().appOrigin).href,
+      // Fixed same-origin paths also work when Shopify configuration is unavailable.
+      Location: path,
     },
   });
 }
@@ -133,15 +135,47 @@ export async function connect(request: Request) {
 }
 export async function callback(request: Request) {
   const jar = await cookies();
+  let stage: "readiness" | "authentication" | "rate_limit" | "oauth" =
+    "readiness";
   try {
-    const context = await requireWorkspace();
+    let context: WorkspaceContext | undefined;
+    const readiness = await getBackendStatus(fetch, async () => {
+      stage = "authentication";
+      context = await requireWorkspace();
+      stage = "readiness";
+    });
+    if (!readiness.liveConnectionsEnabled || !context) {
+      console.warn("shopify_callback_blocked", {
+        stage,
+        blockers: readiness.blockers,
+        stateCookiePresent: !!jar.get(stateCookie)?.value,
+      });
+      return redirect("/integrations?shopify=failed");
+    }
+    stage = "rate_limit";
     await rateLimiter.consume("mutation", context.actorId);
+    stage = "oauth";
     await connectionService(context).complete(
       new URL(request.url).searchParams,
       jar.get(stateCookie)?.value,
     );
     return redirect("/integrations?shopify=connected");
-  } catch {
+  } catch (error) {
+    // Never log the Request, URL, query parameters, cookies or error objects.
+    const code =
+      error instanceof BackendError &&
+      [
+        "INVALID_CALLBACK",
+        "INVALID_STATE",
+        "NOT_AUTHENTICATED",
+        "NOT_AUTHORIZED",
+        "RATE_LIMITED",
+        "DATABASE_UNAVAILABLE",
+        "CONNECTION_FAILED",
+      ].includes(error.code)
+        ? error.code
+        : "UNAVAILABLE";
+    console.warn("shopify_callback_failed", { stage, code });
     return redirect("/integrations?shopify=failed");
   } finally {
     jar.set(stateCookie, "", {

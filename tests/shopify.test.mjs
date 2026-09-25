@@ -881,3 +881,128 @@ test("a consumed OAuth attempt for another business is rejected before token exc
   );
   assert.equal(exchanges, 0);
 });
+
+test("cross-site GET callback keeps verified identity, durable state, encryption and safe redirects", async () => {
+  const { BackendError } = load("lib/server/errors.ts");
+  const logs = [],
+    originalWarn = console.warn;
+  console.warn = (...args) => logs.push(args);
+  try {
+    for (const scenario of [
+      "success",
+      "invalid_state",
+      "expired",
+      "replayed",
+      "wrong_shop",
+      "hmac",
+      "missing_cookie",
+      "missing_session",
+      "missing_schema",
+      "forged_context",
+    ]) {
+      const { service, store, calls } = flow();
+      const { state } = await service.begin(shop);
+      let params = signed(state);
+      if (scenario === "invalid_state") params = signed("b".repeat(64));
+      if (scenario === "expired")
+        store.states.get(digestState(state)).expiresAt = new Date(
+          0,
+        ).toISOString();
+      if (scenario === "replayed")
+        await store.consume(digestState(state), shop);
+      if (scenario === "wrong_shop")
+        params = signed(state, { shop: "other.myshopify.com" });
+      if (scenario === "hmac") params.set("hmac", "0".repeat(64));
+      // Even valid HMAC query parameters cannot supply an organization/business.
+      if (scenario === "forged_context") {
+        params = signed(state, {
+          organizationId: context.organizationId,
+          businessId: context.businessId,
+        });
+        store.states.get(digestState(state)).businessId = randomUUID();
+      }
+      const cookieWrites = [];
+      mocks.set("next/headers", {
+        cookies: async () => ({
+          get: () =>
+            scenario === "missing_cookie" ? undefined : { value: state },
+          set: (...args) => cookieWrites.push(args),
+        }),
+      });
+      mocks.set(path.resolve("lib/server/auth/context.ts"), {
+        requireWorkspace: async () => {
+          if (scenario === "missing_session")
+            throw new BackendError("NOT_AUTHENTICATED", "PRIVATE_SESSION");
+          return context;
+        },
+      });
+      mocks.set(path.resolve("lib/server/readiness.ts"), {
+        getBackendStatus: async (_transport, verify) => {
+          try {
+            await verify();
+          } catch {
+            return {
+              liveConnectionsEnabled: false,
+              blockers: ["SUPABASE_AUTH_UNAVAILABLE"],
+            };
+          }
+          return {
+            liveConnectionsEnabled: scenario !== "missing_schema",
+            blockers:
+              scenario === "missing_schema"
+                ? ["COMMERCE_MIGRATION_005_REQUIRED"]
+                : [],
+          };
+        },
+      });
+      mocks.set(path.resolve("lib/server/shopify/service.ts"), {
+        connectionService: (verified) => {
+          assert.deepEqual(verified, context);
+          return service;
+        },
+      });
+      cache.delete(path.resolve("lib/server/shopify/http.ts"));
+      const { callback } = load("lib/server/shopify/http.ts");
+      const request = new Request(`${config.redirectUri}?${params}`, {
+        headers: {
+          "sec-fetch-site": "cross-site",
+          "sec-fetch-mode": "navigate",
+        },
+      });
+      const response = await callback(request);
+      assert.equal(response.status, 303, scenario);
+      assert.equal(
+        response.headers.get("location"),
+        `/integrations?shopify=${scenario === "success" ? "connected" : "failed"}`,
+        scenario,
+      );
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+      assert.equal(await response.text(), "");
+      assert.equal(cookieWrites.at(-1)[2].maxAge, 0);
+      assert.equal(cookieWrites.at(-1)[2].secure, true);
+      assert.equal(calls.length, scenario === "success" ? 2 : 0, scenario);
+      if (scenario === "success") {
+        assert.equal(store.row.status, "connected");
+        assert.equal(store.row.business_id, context.businessId);
+        assert.equal(
+          JSON.stringify([...store.envelopes]).includes(
+            "TEST_ONLY_ACCESS_TOKEN",
+          ),
+          false,
+        );
+      }
+      assert.equal(JSON.stringify(logs).includes(state), false);
+    }
+    for (const secret of [
+      "fixture_code",
+      "TEST_ONLY_ACCESS_TOKEN",
+      "TEST_ONLY_REFRESH_TOKEN",
+      "PRIVATE_SESSION",
+      config.clientSecret,
+    ])
+      assert.equal(JSON.stringify(logs).includes(secret), false);
+  } finally {
+    console.warn = originalWarn;
+  }
+});

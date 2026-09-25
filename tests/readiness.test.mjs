@@ -218,7 +218,7 @@ test("Shopify route gates never call execution on failed readiness; complete rea
     method: "POST",
     body: "{}",
   });
-  for (const action of ["connect", "callback", "read"]) {
+  for (const action of ["connect", "read"]) {
     const route = load(`app/api/integrations/shopify/${action}/route.ts`);
     const handler = route.POST ?? route.GET;
     const response = await handler(request);
@@ -233,7 +233,93 @@ test("Shopify route gates never call execution on failed readiness; complete rea
     401,
   );
   assert.equal(calls, 1);
+  // Callback readiness lives inside its HTTP handler so every failure gets a
+  // safe UI redirect; it must not run the public settings probe in the route.
+  allowed = false;
+  assert.equal(
+    (await load("app/api/integrations/shopify/callback/route.ts").GET(request))
+      .status,
+    303,
+  );
+  assert.equal(calls, 2);
 });
+
+test("callback readiness uses actual authenticated-user verification, never Auth settings", async () =>
+  withEnv({}, async () => {
+    let verified = 0;
+    const result = await getBackendStatus(
+      async (url, options) => {
+        assert.notEqual(new URL(url).pathname, "/auth/v1/settings");
+        return transport()(url, options);
+      },
+      async () => {
+        verified++;
+      },
+    );
+    assert.equal(verified, 1);
+    assert.equal(result.liveConnectionsEnabled, true);
+    const denied = await getBackendStatus(transport(), async () => {
+      throw new Error("PRIVATE_SESSION_ERROR");
+    });
+    assert.equal(denied.liveConnectionsEnabled, false);
+    assert.deepEqual(denied.blockers, ["SUPABASE_AUTH_UNAVAILABLE"]);
+    assert.equal(
+      JSON.stringify(denied).includes("PRIVATE_SESSION_ERROR"),
+      false,
+    );
+  }));
+
+test("actual callback authentication cannot bypass missing server configuration or migration", async () => {
+  for (const key of [
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+    "SUPABASE_SECRET_KEY",
+  ])
+    await withEnv({ [key]: undefined }, async () => {
+      const result = await getBackendStatus(transport(), async () => {});
+      assert.equal(result.liveConnectionsEnabled, false);
+    });
+  await withEnv({}, async () => {
+    const result = await getBackendStatus(
+      transport({
+        schema: {
+          ...schema,
+          migrations: { ...schema.migrations, "005": false },
+        },
+      }),
+      async () => {},
+    );
+    assert.equal(result.liveConnectionsEnabled, false);
+    assert.ok(result.blockers.includes("COMMERCE_MIGRATION_005_REQUIRED"));
+  });
+});
+
+test("readiness retries transient Auth probes once but never accepts persistent failure", async () =>
+  withEnv({}, async () => {
+    for (const failure of ["timeout", 429, 503, 401]) {
+      let attempts = 0;
+      const result = await getBackendStatus(async (url, options) => {
+        if (new URL(url).pathname === "/auth/v1/settings" && ++attempts === 1) {
+          if (failure === "timeout")
+            throw new DOMException("PRIVATE", "TimeoutError");
+          return new Response(null, { status: failure });
+        }
+        return transport()(url, options);
+      });
+      assert.equal(result.liveConnectionsEnabled, failure !== 401);
+      assert.equal(attempts, failure === 401 ? 1 : 2);
+    }
+    let attempts = 0;
+    const failed = await getBackendStatus(async (url, options) => {
+      if (new URL(url).pathname === "/auth/v1/settings") {
+        attempts++;
+        throw new Error("PRIVATE");
+      }
+      return transport()(url, options);
+    });
+    assert.equal(failed.liveConnectionsEnabled, false);
+    assert.equal(attempts, 2);
+  }));
 test("production composition imports real repositories and adapter, with no mock or AI runtime dependency", () => {
   const visited = new Set();
   function visit(file) {

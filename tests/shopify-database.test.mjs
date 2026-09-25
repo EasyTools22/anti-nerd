@@ -770,3 +770,20 @@ test("staged replacement remains bound to its business, actor and expiry", async
   assert.equal((await a.current()).credential_reference, first.envelope.id);
   await a.scoped("abort", { generation: s.generation });
 });
+
+test("existing commerce verification checks schema, RLS and RPC grants after all migrations", async () => {
+  const results = await db.exec(
+    fs.readFileSync("supabase/commerce-verification.sql", "utf8"),
+  );
+  const readiness = results[0].rows[0].backend_readiness;
+  assert.equal(readiness.ready, true);
+  assert.equal(readiness.migrations["005"], true);
+  assert.ok(results[1].rows.length >= 9);
+  assert.ok(results[1].rows.every((row) => row.rls_enabled));
+  for (const row of results[2].rows) {
+    const business = /create_business|select_business/.test(row.routine);
+    assert.equal(row.anon_can_execute, false);
+    assert.equal(row.member_can_execute, business);
+    assert.equal(row.server_can_execute, !business);
+  }
+});

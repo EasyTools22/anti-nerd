@@ -588,8 +588,6 @@ test("unconfigured connection endpoints never accept or echo submitted secrets",
       false,
     );
   }
-  assert.equal(
-    (await load("app/api/integrations/shopify/callback/route.ts").GET()).status,
-    503,
-  );
+  // Callback readiness now redirects to the UI; its real HTTP handler and
+  // fail-closed configuration gates are covered in shopify/readiness tests.
 });

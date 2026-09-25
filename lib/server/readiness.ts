@@ -4,9 +4,13 @@ import { shopifyConfig } from "./shopify/config";
 import { ShopifyVault } from "./shopify/vault";
 
 type Transport = typeof fetch;
-/** Only fixed, credential-free diagnostics may leave this module. No tenant rows are read. */
+/** Only fixed, credential-free diagnostics leave this module. Public probes read
+ * catalogs/settings only; a callback verifier additionally authenticates its user. */
 export async function getBackendStatus(
   transport: Transport = fetch,
+  // Callback callers verify the real Supabase user and workspace instead of
+  // probing the unrelated public Auth settings endpoint. Never a client flag.
+  verifyAuthentication?: () => Promise<void>,
 ): Promise<BackendStatus> {
   const blockers: string[] = [];
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -104,9 +108,41 @@ export async function getBackendStatus(
         return "pending" as const;
       }
       try {
-        const response = await request("/auth/v1/settings", publicKey!);
-        if (!response.ok || (await response.json())?.external?.email !== true)
-          throw new Error("unavailable");
+        if (verifyAuthentication) {
+          await verifyAuthentication();
+        } else {
+          // These are read-only probes. Retry one transient failure, never an
+          // invalid key or disabled email provider, and never an OAuth exchange.
+          for (let attempt = 0; attempt < 2; attempt++) {
+            let response: Response;
+            try {
+              response = await request("/auth/v1/settings", publicKey!);
+            } catch {
+              if (attempt === 0) continue;
+              console.warn("backend_readiness_auth", {
+                reason: "transport_or_timeout",
+              });
+              throw new Error("unavailable");
+            }
+            if (
+              attempt === 0 &&
+              (response.status === 429 || response.status >= 500)
+            ) {
+              await response.body?.cancel();
+              continue;
+            }
+            if (!response.ok) {
+              console.warn("backend_readiness_auth", {
+                reason: "http",
+                status: response.status,
+              });
+              throw new Error("unavailable");
+            }
+            if ((await response.json())?.external?.email !== true)
+              throw new Error("unavailable");
+            break;
+          }
+        }
         return "configured" as const;
       } catch {
         blockers.push("SUPABASE_AUTH_UNAVAILABLE");
